@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AugmentWebviewStateStore">
+    <option name="stateMap">
+      <map>
+        <entry key="CHAT_STATE" value="[[&quot;currentConversationId&quot;,&quot;pins&quot;,&quot;agentExecutionMode&quot;,&quot;isPanelCollapsed&quot;,&quot;displayedAnnouncements&quot;,&quot;conversations&quot;,&quot;onboarding&quot;,&quot;a|0|1|2|3|4|5|6&quot;,&quot;__NEW_AGENT__&quot;,&quot;o|&quot;,&quot;manual&quot;,&quot;b|F&quot;,&quot;a|&quot;,&quot;a|8&quot;,&quot;id&quot;,&quot;createdAtIso&quot;,&quot;lastInteractedAtIso&quot;,&quot;selectedModelId&quot;,&quot;requestIds&quot;,&quot;isPinned&quot;,&quot;isShareable&quot;,&quot;extraData&quot;,&quot;rootTaskUuid&quot;,&quot;toolUseStates&quot;,&quot;chatHistory&quot;,&quot;feedbackStates&quot;,&quot;draftExchange&quot;,&quot;a|E|F|G|H|I|J|K|L|M|N|O|P|Q&quot;,&quot;2026-04-07T07:29:59.607Z&quot;,&quot;claude-sonnet-4-6&quot;,&quot;isAgentConversation&quot;,&quot;a|U&quot;,&quot;b|T&quot;,&quot;o|V|W&quot;,&quot;c3791150-88b1-425c-9ac4-d5768cb29d63&quot;,&quot;request_id&quot;,&quot;uuid&quot;,&quot;chatItemType&quot;,&quot;status&quot;,&quot;fromTimestamp&quot;,&quot;toTimestamp&quot;,&quot;a|Z|a|b|c|d|e&quot;,&quot;80a7a213-3f60-416b-ba44-b707c55c0962&quot;,&quot;ca5ab2b5-c9c7-4f0d-b5c0-25271f49452e&quot;,&quot;agentic-checkpoint-delimiter&quot;,&quot;success&quot;,&quot;n|0&quot;,&quot;n|VG5WGOO&quot;,&quot;o|f|g|h|i|j|k|l&quot;,&quot;a|m&quot;,&quot;request_message&quot;,&quot;rich_text_json_repr&quot;,&quot;a|o|p|c&quot;,&quot;&quot;,&quot;type&quot;,&quot;content&quot;,&quot;a|s|t&quot;,&quot;doc&quot;,&quot;a|s&quot;,&quot;paragraph&quot;,&quot;o|w|x&quot;,&quot;a|y&quot;,&quot;o|u|v|z&quot;,&quot;draft&quot;,&quot;o|q|r|10|11&quot;,&quot;o|R|8|S|S|T|C|B|B|X|Y|9|n|9|12&quot;,&quot;o|D|13&quot;,&quot;shown&quot;,&quot;workspaceQuestions&quot;,&quot;a|15|16&quot;,&quot;o|17|B|C&quot;,&quot;o|7|8|9|A|B|C|14|18&quot;],&quot;19&quot;]" />
+      </map>
+    </option>
+  </component>
+</project>
