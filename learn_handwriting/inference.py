@@ -64,6 +64,8 @@ BENCHMARK = "learn_handwriting"
 MAX_STEPS = 15
 TEMPERATURE = 0.7
 SUCCESS_SCORE_THRESHOLD = 0.90  # 90% pixel coverage required
+SCORE_MIN = 0.001  # grader rejects score == 0.0  (must be strictly > 0)
+SCORE_MAX = 0.999  # grader rejects score == 1.0  (must be strictly < 1)
 
 
 # ── Structured output schema ────────────────────────────────────────────────
@@ -213,7 +215,7 @@ async def run_task(task_name: str, env: LearnHandwritingEnv, client: OpenAI) -> 
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
-    score = 0.0
+    score = SCORE_MIN  # default to minimum valid score; updated after each episode
     success = False
     match_percentage = 0.0
 
@@ -260,7 +262,7 @@ async def run_task(task_name: str, env: LearnHandwritingEnv, client: OpenAI) -> 
             if done:
                 break
 
-        score = min(max(match_percentage, 0.0), 1.0)
+        score = min(max(match_percentage, SCORE_MIN), SCORE_MAX)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     except Exception as e:
