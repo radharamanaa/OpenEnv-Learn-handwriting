@@ -58,8 +58,8 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 
-# Task: "easy" | "medium" | "hard"
-TASK_NAME = os.getenv("LEARN_HANDWRITING_TASK", "easy")
+# All task difficulties to run — produces 3 graded tasks required by the validator
+ALL_TASKS = ["easy", "medium", "hard"]
 BENCHMARK = "learn_handwriting"
 MAX_STEPS = 15
 TEMPERATURE = 0.7
@@ -195,12 +195,21 @@ def get_stroke(
         return StrokeOutput(reasoning="fallback", x1=10, y1=10, x2=90, y2=90, width=5)
 
 
-# ── Main episode loop ────────────────────────────────────────────────────────
+# ── Single-task episode loop ─────────────────────────────────────────────────
 
-async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    env = await LearnHandwritingEnv.from_docker_image(IMAGE_NAME) if IMAGE_NAME else LearnHandwritingEnv(base_url=os.getenv("ENV_BASE_URL", "http://localhost:8000"))
+async def run_task(task_name: str, env: LearnHandwritingEnv, client: OpenAI) -> float:
+    """Run one full episode for the given task difficulty and return the final score.
 
+    Emits exactly one [START] line, one [STEP] line per stroke, and one [END] line.
+
+    Args:
+        task_name: Difficulty level — "easy", "medium", or "hard".
+        env:       Shared environment client (connection is reused across tasks).
+        client:    OpenAI client for LLM stroke generation.
+
+    Returns:
+        Final score (match_percentage clamped to [0, 1]).
+    """
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
@@ -208,10 +217,10 @@ async def main() -> None:
     success = False
     match_percentage = 0.0
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        result = await env.reset()
+        result = await env.reset(task=task_name)
         obs = result.observation
         target_character = obs.target_character
         last_pixels_matched = 0
@@ -243,29 +252,55 @@ async def main() -> None:
             rewards.append(reward)
             steps_taken = step
             log_step(step=step, action=action_str, reward=reward, done=done, error=None)
-            history.append(f"Step {step}: {action_str} → matched={last_pixels_matched}px reward={reward:.4f} coverage={match_percentage:.1%}")
+            history.append(
+                f"Step {step}: {action_str} → matched={last_pixels_matched}px "
+                f"reward={reward:.4f} coverage={match_percentage:.1%}"
+            )
 
             if done:
                 break
 
-        # Score = final match_percentage (already 0.0–1.0)
         score = min(max(match_percentage, 0.0), 1.0)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
+    except Exception as e:
+        print(f"[DEBUG] run_task({task_name}) error: {e}", flush=True)
+
     finally:
-        try:
-            await env.close()
-        except Exception as e:
-            print(f"[DEBUG] env.close() error: {e}", flush=True)
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
         print(f"\n{'='*50}", flush=True)
-        print(f"  Task        : {TASK_NAME}", flush=True)
+        print(f"  Task        : {task_name}", flush=True)
         print(f"  Model       : {MODEL_NAME}", flush=True)
         print(f"  Total Steps : {steps_taken} / {MAX_STEPS}", flush=True)
         print(f"  Total Reward: {sum(rewards):.4f}", flush=True)
         print(f"  Final Score : {score:.2%}", flush=True)
         print(f"  Success     : {success}", flush=True)
         print(f"{'='*50}\n", flush=True)
+
+    return score
+
+
+# ── Main: run all 3 tasks to satisfy the ≥3 graders requirement ──────────────
+
+async def main() -> None:
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    for task_name in ALL_TASKS:
+        # Create a fresh WebSocket connection per task.
+        # A single shared connection drops after the first episode ends,
+        # causing "no close frame received or sent" for subsequent tasks.
+        env = (
+            await LearnHandwritingEnv.from_docker_image(IMAGE_NAME)
+            if IMAGE_NAME
+            else LearnHandwritingEnv(base_url=os.getenv("ENV_BASE_URL", "http://localhost:8000"))
+        )
+        try:
+            await run_task(task_name, env, client)
+        finally:
+            try:
+                await env.close()
+            except Exception as e:
+                print(f"[DEBUG] env.close() error: {e}", flush=True)
 
 
 if __name__ == "__main__":

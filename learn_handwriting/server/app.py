@@ -186,9 +186,15 @@ def main(host: str = "0.0.0.0", port: int = 8000):
     multiple workers:
         uvicorn learn_handwriting.server.app:app --workers 4
     """
+    import argparse
     import uvicorn
 
-    uvicorn.run(app, host=host, port=port)
+    parser = argparse.ArgumentParser(description="Learn Handwriting Environment Server")
+    parser.add_argument("--host", default=host, help="Host address to bind to")
+    parser.add_argument("--port", type=int, default=port, help="Port number to listen on")
+    args, _ = parser.parse_known_args()
+
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

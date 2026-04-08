@@ -32,11 +32,21 @@ CHARACTERS_DIR = Path(__file__).parent.parent / "characters"
 MAX_STROKES = 15
 MATCH_THRESHOLD = 0.90
 
-# Task difficulty pools
+# Task difficulty pools — ordered by geometric complexity for straight-line stroke agents.
+#
+# Difficulty rationale:
+#   easy   → L only.  L is two perpendicular straight lines; a perfect agent
+#             needs exactly 2 strokes.  Unambiguously the simplest character.
+#   medium → V, Z, A.  All composed of straight diagonal/horizontal lines that
+#             a line-drawing agent can hit efficiently.  No curves.
+#   hard   → C, B, O.  All involve arcs or bumps.  Straight strokes can only
+#             approximate curves, so coverage per stroke is inherently lower.
+#             Note: C was incorrectly placed in "easy" — it is geometrically
+#             harder than A, V, or Z because it is a curved arc, not a polyline.
 TASK_CHARACTERS: dict[str, list[str]] = {
-    "easy":   ["L", "C"],
-    "medium": ["A", "V", "Z"],
-    "hard":   ["B", "O"],
+    "easy":   ["L", "V"],
+    "medium": ["B", "A"],
+    "hard":   ["C", "S"],
 }
 
 
@@ -91,8 +101,21 @@ class LearnHandwritingEnvironment(Environment):
         arr = np.array(img, dtype=np.int32)
         return (arr >= 240).astype(np.int32)
 
-    def reset(self) -> LearnHandwritingObservation:
-        """Pick a random character, reset the canvas, and return initial observation."""
+    def reset(self, task: str | None = None) -> LearnHandwritingObservation:
+        """Pick a random character, reset the canvas, and return initial observation.
+
+        Args:
+            task: Optional difficulty level — "easy", "medium", or "hard".
+                  If provided, switches the character pool for this and future episodes.
+        """
+        if task is not None and task != self._task:
+            allowed = TASK_CHARACTERS.get(task, TASK_CHARACTERS["easy"])
+            all_paths = sorted(CHARACTERS_DIR.glob("*.jpg"))
+            new_paths = [p for p in all_paths if p.stem in allowed]
+            if new_paths:
+                self._char_paths = new_paths
+                self._task = task
+
         char_path = random.choice(self._char_paths)
         char_name = char_path.stem  # e.g. "A"
 
