@@ -119,6 +119,26 @@ finally:
     env.close()
 ```
 
+## Dataset Generation (SFT)
+
+To fine-tune models like **Qwen2.5-7B-Instruct** to act as a robust stroke-based policy agent, we use a modular synthetic data pipeline located in the `datagen_sft/` directory.
+
+### The Pipeline
+1. **`oracle.py` (Geometric Definitions)**: Stores the mathematically ideal stroke paths for every character in normalized coordinates `(0, 1)`.
+2. **`generator.py` (Augmentation & Combinatorics)**:
+   - Permutes all possible **stroke orders** and **drawing directions**.
+   - Applies **stochastic jitter** (random pixel offsets) to ensure spatial robustness.
+   - Generates **parallel offset strokes** to simulate brush width and guarantee the 90% coverage threshold is physically reachable.
+3. **`simulate_and_format.py` (Validation & Grounding)**:
+   - Executes the generated trajectories in the actual `LearnHandwritingEnvironment`.
+   - Strictly filters out any trajectories that fail the 90% coverage or violate shape integrity.
+   - Formats successful episodes into ChatML-style JSONL for fine-tuning.
+4. **`verify_readable.py` (Visualization)**:
+   - Converts the raw JSONL into human-readable, pretty-printed JSON samples grouped by character (saved in `datagen_sft/readable_samples/`).
+
+### Dataset Status
+The pipeline currently produces **652 high-quality episodes** saved in `datagen_sft/qwen25_finetune_data.jsonl`, covering characters from the Easy, Medium, and Hard pools.
+
 ## Building the Docker Image
 
 ```bash
@@ -335,6 +355,12 @@ learn_handwriting/
 ├── openenv.yaml           # OpenEnv manifest
 ├── pyproject.toml         # Project metadata and dependencies
 ├── inference.py           # LLM inference loop (hackathon validator)
+├── datagen_sft/           # SFT Data Generation Pipeline
+│   ├── oracle.py          # Mathematical stroke definitions
+│   ├── generator.py       # Combinatorial variation & jitter engine
+│   ├── simulate_and_format.py  # Environment-grounded trajectory capture
+│   ├── verify_readable.py # JSONL to pretty-printed samples converter
+│   └── qwen25_finetune_data.jsonl # Final generated dataset (652 episodes)
 ├── visualizations/        # Watch notebooks and local debugging tools
 │   ├── watch_runner.py        
 │   ├── watch_easy.ipynb       
