@@ -98,7 +98,7 @@ def test_vertical_spine_for_B_does_not_trigger_integrity():
 
 def test_integrity_reward_is_not_negative():
     """Integrity violation must produce reward=0.0, never a negative value."""
-    for char in ["A", "B", "C", "O", "G"]:
+    for char in ["A", "B", "C", "D", "G", "O", "P", "Q", "R"]:
         if char not in DISQUALIFICATION_MASKS:
             continue
         env = _env_for_char(char)
@@ -126,9 +126,39 @@ def test_circle_for_Q_does_not_trigger_integrity():
     assert obs.integrity_violated is False
 
 
+def test_flood_canvas_triggers_integrity_D():
+    """Filling the entire canvas must trigger D's bowl-interior constraint."""
+    env = _env_for_char("D")
+    env._canvas = np.ones((100, 100), dtype=np.int32)
+    obs = env.step(LearnHandwritingAction(action_type="line", x1=0, y1=0, x2=1, y2=1))
+    assert obs.done is True
+    assert obs.integrity_violated is True
+    assert obs.reward == 0.0
+
+
+def test_flood_canvas_triggers_integrity_P():
+    """Filling the entire canvas must trigger P's bowl-interior constraint."""
+    env = _env_for_char("P")
+    env._canvas = np.ones((100, 100), dtype=np.int32)
+    obs = env.step(LearnHandwritingAction(action_type="line", x1=0, y1=0, x2=1, y2=1))
+    assert obs.done is True
+    assert obs.integrity_violated is True
+    assert obs.reward == 0.0
+
+
+def test_flood_canvas_triggers_integrity_R():
+    """Filling the entire canvas must trigger R's bowl-interior constraint."""
+    env = _env_for_char("R")
+    env._canvas = np.ones((100, 100), dtype=np.int32)
+    obs = env.step(LearnHandwritingAction(action_type="line", x1=0, y1=0, x2=1, y2=1))
+    assert obs.done is True
+    assert obs.integrity_violated is True
+    assert obs.reward == 0.0
+
+
 def test_no_integrity_for_simple_chars():
     """Easy/medium chars without holes must never trigger integrity violation."""
-    for char in ["L", "T", "V", "X", "N", "Z", "E"]:
+    for char in ["L", "T", "V", "X", "N", "Z", "E", "F", "H", "I", "K", "M", "W", "Y", "J", "U"]:
         env = _env_for_char(char)
         env._canvas = np.ones((100, 100), dtype=np.int32)
         obs = env.step(LearnHandwritingAction(action_type="line", x1=0, y1=0, x2=99, y2=99))

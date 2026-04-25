@@ -111,7 +111,10 @@ SYSTEM_PROMPT = textwrap.dedent(f"""
     SHAPE INTEGRITY — protected regions you must NOT fill in:
     - A: inner triangle hole (the counter between the two legs and crossbar)
     - B: two enclosed lobe holes (upper and lower bumps)
+    - D: interior of the D bowl (semicircle counter — outline only, like O)
     - O: circle interior (do not fill the hole)
+    - P: bowl interior (do not fill the hole in the loop)
+    - R: bowl interior (do not fill the hole above the diagonal leg)
     - C: right-side opening (do not close it — that would make O)
     - S: two bridge gaps (do not connect the loops — that would make 8)
     - G: right-side opening (do not close it — that would make O)

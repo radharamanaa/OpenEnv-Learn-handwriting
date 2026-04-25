@@ -53,11 +53,11 @@ MATCH_THRESHOLD = 0.90
 # easy   → pure straight-line characters; a perfect agent needs ≤ 2 strokes.
 # medium → straight lines but 3+ strokes, or mild complexity; no curves.
 # hard   → curves, open gaps, enclosed counters, or complex topology.
-#           These characters also carry shape-integrity constraints (see renderer.py).
+#           Many of these letters use shape-integrity constraints (see renderer.py).
 TASK_CHARACTERS: dict[str, list[str]] = {
     "easy":   ["L", "T", "V", "X"],
-    "medium": ["A", "N", "Z", "E"],
-    "hard":   ["B", "C", "S", "O", "G", "Q"],
+    "medium": ["A", "N", "Z", "E", "F", "H", "I", "K", "M", "W", "Y"],
+    "hard":   ["B", "C", "D", "G", "J", "O", "P", "Q", "R", "S", "U"],
 }
 
 
@@ -136,12 +136,14 @@ class LearnHandwritingEnvironment(Environment):
         self._canvas: np.ndarray = np.zeros((100, 100), dtype=np.int32)
         self._state = LearnHandwritingState(episode_id=str(uuid4()), step_count=0)
 
-    def reset(self, task: str | None = None) -> LearnHandwritingObservation:
+    def reset(self, task: str | None = None, character: str | None = None) -> LearnHandwritingObservation:
         """Pick a random character, reset the canvas, and return initial observation.
 
         Args:
             task: Optional difficulty level — "easy", "medium", or "hard".
                   If provided, switches the character pool for this and future episodes.
+            character: If set, use this exact target letter instead of sampling from the pool
+                  (used by datagen so strokes stay aligned after ``task`` switches pools).
         """
         if task is not None and task != self._task:
             new_pool = TASK_CHARACTERS.get(task, TASK_CHARACTERS["easy"])
@@ -149,7 +151,10 @@ class LearnHandwritingEnvironment(Environment):
                 self._char_pool = new_pool
                 self._task = task
 
-        char = random.choice(self._char_pool)
+        if character is not None:
+            char = character
+        else:
+            char = random.choice(self._char_pool)
         self._target_matrix = render_target_character(char).astype(np.int32)
         self._total_target_pixels = int(np.sum(self._target_matrix))
         self._target_bbox = compute_character_bbox(char)

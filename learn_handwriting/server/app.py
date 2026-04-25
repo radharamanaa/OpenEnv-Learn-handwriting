@@ -83,8 +83,8 @@ def _build_handwriting_ui(web_manager, action_fields, metadata, is_chat_env, tit
             gr.HTML(
                 "<p style='margin:auto 0; line-height:2.4em'>"
                 "<b>easy</b>: L T V X &nbsp;|&nbsp; "
-                "<b>medium</b>: A N Z E &nbsp;|&nbsp; "
-                "<b>hard</b>: B C S O G Q</p>"
+                "<b>medium</b>: A N Z E F H I K M W Y &nbsp;|&nbsp; "
+                "<b>hard</b>: B C D G J O P Q R S U</p>"
             )
 
         # ── State display ────────────────────────────────────────────────────

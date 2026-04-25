@@ -13,8 +13,9 @@ tags:
 
 # Learn Handwriting Environment
 
-A Reinforcement Learning environment where an agent learns to draw capital letters
-by issuing geometric actions (lines, curves, circles, ellipses) on a 100×100 canvas. 
+A Reinforcement Learning environment where an agent learns to draw **all 26 capital letters (A–Z)**
+by issuing geometric actions (lines, curves, circles, ellipses) on a 100×100 canvas.
+Letters are grouped into **easy**, **medium**, and **hard** pools by geometric complexity.
 The agent is rewarded for each action that overlaps with the target character's white pixels.
 To prevent "scribbling", there is a strict **ink penalty**: the agent fails immediately if it draws more than 1.7x the target's total pixels (configurable via `MAX_DRAWN_MULTIPLIER` env var).
 The episode succeeds when 90% of the target is covered within 15 actions without running out of ink or violating shape integrity.
@@ -56,7 +57,7 @@ The agent then issues actions one at a time. The agent can choose to draw a stra
 ```
 
 Key design decisions:
-- **Font-based rendering** — characters are rendered from Roboto Bold at runtime; no static image files.
+- **Font-based rendering** — targets are rasterized from Roboto Bold (`Roboto/static/Roboto-Bold.ttf`) at runtime. No per-letter image assets are required for training or the server. For human inspection, run `python export_character_images.py` to write upscaled PNGs of every pool letter into `characters/`.
 - **Rich Action Space** — line, curve (3-point Bezier), circle, and ellipse tools.
 - **Fixed Width** — all strokes are 8 pixels wide to reduce LLM cognitive load.
 - **Bounding Box Awareness** — The agent receives the tight `[x1, y1, x2, y2]` bounding box of the character on every step, removing the need to "guess" where to draw.
@@ -72,8 +73,10 @@ Characters are grouped by geometric complexity:
 | Pool | Characters | Strokes needed | Notes |
 |---|---|---|---|
 | `easy` | `L`, `T`, `V`, `X` | 2 | Pure straight-line strokes only |
-| `medium` | `A`, `N`, `Z`, `E` | 3–4 | Straight lines, 3+ strokes; `A` has integrity constraint |
-| `hard` | `B`, `C`, `S`, `O`, `G`, `Q` | 1–3+ | Curves or enclosed counters; all have integrity constraints |
+| `medium` | `A`, `N`, `Z`, `E`, `F`, `H`, `I`, `K`, `M`, `W`, `Y` | 3–4 | Straight lines, 3+ strokes; `A` has integrity constraint |
+| `hard` | `B`, `C`, `D`, `G`, `J`, `O`, `P`, `Q`, `R`, `S`, `U` | 1–4+ | Curves and/or enclosed counters; integrity where noted below |
+
+All **26** capital letters `A`–`Z` are included across the three pools.
 
 ### Shape Integrity Constraints
 
@@ -83,13 +86,25 @@ Some characters have **protected regions** the agent must not fill in:
 |---|---|---|
 | `A` | Inner triangle counter | Flood-fill interior |
 | `B` | Upper and lower lobe counters | Flood-fill interior (2 components) |
+| `D` | Bowl interior (semicircle) | Flood-fill interior |
 | `O` | Circle interior | Flood-fill interior |
+| `P` | Bowl interior (loop) | Flood-fill interior |
+| `R` | Bowl interior (above the leg) | Flood-fill interior |
 | `C` | Right-side opening | `render(O) − render(C)` |
 | `S` | Two bridge gaps | `render(8) − render(S)` |
 | `G` | Right-side opening | `render(O) − render(G)` |
 | `Q` | Circle interior (ring must stay open) | Flood-fill interior |
 
 If the agent's canvas covers **> 60%** of any protected zone, the episode ends immediately with `integrity_violated=True` and `reward=0.0`.
+
+Letters **without** a row in the table above have no disqualification masks (for example `L`, `T`, `I`, `J`, `U`, and other straight or open-outline glyphs).
+
+### `reset(task=..., character=...)`
+
+`LearnHandwritingEnvironment.reset()` accepts:
+
+- **`task`** — `"easy"`, `"medium"`, or `"hard"`. Updates the active character pool for this and later episodes.
+- **`character`** — optional. If set, that exact capital letter becomes the target (no random sample). Used by `datagen_sft/simulate_and_format.py` so oracle strokes always match the rendered glyph after the task pool switches. The HTTP/WebSocket API continues to use ordinary random sampling unless you add a similar parameter server-side.
 
 ## Quick Start
 
@@ -130,14 +145,30 @@ To fine-tune models like **Qwen2.5-7B-Instruct** to act as a robust stroke-based
    - Applies **stochastic jitter** (random pixel offsets) to ensure spatial robustness.
    - Generates **parallel offset strokes** to simulate brush width and guarantee the 90% coverage threshold is physically reachable.
 3. **`simulate_and_format.py` (Validation & Grounding)**:
-   - Executes the generated trajectories in the actual `LearnHandwritingEnvironment`.
+   - Executes the generated trajectories in the actual `LearnHandwritingEnvironment`, calling `reset(task=..., character=...)` so the target letter always matches the oracle.
    - Strictly filters out any trajectories that fail the 90% coverage or violate shape integrity.
    - Formats successful episodes into ChatML-style JSONL for fine-tuning.
+   - **Augmentation depth** scales with oracle length: more `num_augments` for long stroke lists (e.g. `W`) and for 2–3 stroke letters so short oracles still get enough samples.
 4. **`verify_readable.py` (Visualization)**:
-   - Converts the raw JSONL into human-readable, pretty-printed JSON samples grouped by character (saved in `datagen_sft/readable_samples/`).
+   - Groups episodes by `target_character` and writes up to **three** sample episodes per character to `datagen_sft/readable_samples/<CHAR>_sample.json` for inspection.
+   - For display only, **assistant** turns are pretty-printed as JSON objects; the **canonical SFT file** is still `qwen25_finetune_data.jsonl`, where each assistant `content` is a **JSON string** (as written by `simulate_and_format.py`).
 
-### Dataset Status
-The pipeline currently produces **652 high-quality episodes** saved in `datagen_sft/qwen25_finetune_data.jsonl`, covering characters from the Easy, Medium, and Hard pools.
+5. **`test_l.py` (optional)**: Ad-hoc grid search over stroke placement for the letter `L` in the local environment; not part of the main JSONL export.
+
+### Dataset status and reproducing
+The checked-in file [`datagen_sft/qwen25_finetune_data.jsonl`](datagen_sft/qwen25_finetune_data.jsonl) is the SFT source of truth. Regenerating rewrites the file; line count is typically **a few thousand** rows (exact number depends on oracle hit rates and augmentation settings). Episodes are drawn from all three pools covering **every capital A–Z**, but **per-letter counts are not uniform**: some hard glyphs (e.g. sparse oracle coverage) appear less often than easy/medium letters. Row metadata includes `target_character`, `task`, `final_match_percentage`, and `num_strokes` (length of the saved stroke list after augmentation — each oracle primitive may become two offset traces for brush width).
+
+To **regenerate** the JSONL and the readable sample JSON files from the project root (the datagen scripts extend `sys.path` to the repo root; tests use `PYTHONPATH=.`):
+
+```bash
+python datagen_sft/simulate_and_format.py
+python datagen_sft/verify_readable.py
+```
+
+### Fine-tuning (Qwen2.5-7B-Instruct) — workflow
+- **Training data** should be the **`messages` field** from each line of `qwen25_finetune_data.jsonl` (Chat-style turns: system, then alternating user/assistant for each stroke in an episode).
+- **Prompt alignment**: `simulate_and_format.py` and `inference.py` both define the same **system** prompt text; the **user** template includes bounding box and per-step feedback so that a fine-tuned policy matches the hackathon `inference.py` loop. For interactive debugging, `visualizations/watch_runner.py` uses a shorter alternative prompt; use the long-form prompts for SFT and for fair before/after comparisons.
+- A **Colab-oriented fine-tune script** (e.g. TRL + PEFT/LoRA, optional push to the Hugging Face Hub) and a **local eval script** (base model vs. fine-tuned on the in-process environment) are part of the intended workflow but may live **outside** this tree or be added under `datagen_sft/` as the project evolves. Install training stacks (PyTorch, `transformers`, `trl`, `peft`, etc.) in that environment; they are not required for the base `pyproject.toml` server client.
 
 ## Building the Docker Image
 
@@ -302,9 +333,11 @@ canvas = state.canvas           # List[List[int]], 100×100, values 0 or 1
 
 ### Quick Sanity Check (no server needed)
 
+With the repo root on `PYTHONPATH` (e.g. `PYTHONPATH=. python`):
+
 ```python
-from learn_handwriting.models import LearnHandwritingAction
-from learn_handwriting.server.learn_handwriting_environment import LearnHandwritingEnvironment
+from models import LearnHandwritingAction
+from server.learn_handwriting_environment import LearnHandwritingEnvironment
 
 env = LearnHandwritingEnvironment()
 obs = env.reset()
@@ -314,11 +347,17 @@ obs = env.step(LearnHandwritingAction(action_type="line", x1=25, y1=10, x2=25, y
 print(f"matched={obs.pixels_matched_this_stroke}, coverage={obs.match_percentage:.2%}, reward={obs.reward:.4f}")
 ```
 
+If the package is **installed** in editable mode, the same imports work as `learn_handwriting.models` / `learn_handwriting.server.learn_handwriting_environment`.
+
 ### Running Tests
 
+From the repository root, point Python at the flat package layout (`server/`, `models.py` at top level):
+
 ```bash
-pytest tests/ -v
+PYTHONPATH=. pytest tests/ -v
 ```
+
+`tests/test_renderer.py` covers all **26** letters (pixel ranges, integrity mask presence, mask/foreground separation). `tests/test_integrity.py` exercises flood-fill and diff-based disqualifiers.
 
 ### Running Locally
 
@@ -328,7 +367,13 @@ uvicorn server.app:app --reload
 
 ## Local Monitoring & Visualization (Jupyter)
 
-The project includes **local watch notebooks** designed to help you visually debug the agent's behavior step-by-step. These are separated by difficulty level: `watch_easy.ipynb`, `watch_medium.ipynb`, and `watch_hard.ipynb`.
+The project includes **local watch notebooks** designed to help you visually debug the agent's behavior step-by-step. These are separated by difficulty level: `watch_easy.ipynb`, `watch_medium.ipynb`, and `watch_hard.ipynb`. Notebook titles list the current character sets for each task (easy: L T V X; medium: includes I; hard: includes D J P R U among others).
+
+To render **all** task characters and integrity overlays to `images/` (large PNGs for debugging masks), run:
+
+```bash
+python preview_characters.py
+```
 
 ### Features
 1. **Live Stroke Animation**: Watch the agent draw live! The canvas updates instantly after every stroke inside the notebook.
@@ -350,32 +395,40 @@ And execute the cells in any of the `watch_*.ipynb` files in Jupyter or your IDE
 learn_handwriting/
 ├── __init__.py            # Exports: Action, Observation, State, Client
 ├── README.md              # This file
+├── Dockerfile             # Container image (OpenEnv / HF Spaces)
 ├── client.py              # LearnHandwritingEnv WebSocket client
 ├── models.py              # LearnHandwritingAction / Observation / State
 ├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
+├── pyproject.toml         # Project metadata and dependencies (package-dir maps learn_handwriting → .)
 ├── inference.py           # LLM inference loop (hackathon validator)
-├── datagen_sft/           # SFT Data Generation Pipeline
-│   ├── oracle.py          # Mathematical stroke definitions
+├── export_character_images.py  # Writes characters/*.png (reference renders from TASK_CHARACTERS)
+├── preview_characters.py  # Renders targets + masks → images/ for inspection
+├── characters/            # PNG exports (from export script; git may ignore or track)
+├── images/                # Output of preview_characters.py
+├── docs/                  # Extra notes (e.g. finetune format)
+├── datagen_sft/           # SFT data generation pipeline
+│   ├── oracle.py          # Stroke definitions (normalized bbox coords) for A–Z
 │   ├── generator.py       # Combinatorial variation & jitter engine
-│   ├── simulate_and_format.py  # Environment-grounded trajectory capture
-│   ├── verify_readable.py # JSONL to pretty-printed samples converter
-│   └── qwen25_finetune_data.jsonl # Final generated dataset (652 episodes)
+│   ├── simulate_and_format.py  # Grounded trajectories → JSONL (uses reset(character=...))
+│   ├── verify_readable.py # JSONL → grouped pretty-printed JSON per character
+│   ├── test_l.py          # Optional L-only grid search (not the main export)
+│   ├── qwen25_finetune_data.jsonl  # Generated ChatML SFT dataset (regenerate to refresh)
+│   └── readable_samples/  # `*_sample.json` (human review; not the training source of truth)
 ├── visualizations/        # Watch notebooks and local debugging tools
-│   ├── watch_runner.py        
-│   ├── watch_easy.ipynb       
-│   ├── watch_medium.ipynb     
-│   └── watch_hard.ipynb       
+│   ├── watch_runner.py
+│   ├── watch_easy.ipynb
+│   ├── watch_medium.ipynb
+│   ├── watch_hard.ipynb
+│   └── inference_local.ipynb
 ├── Roboto/
 │   └── static/
 │       └── Roboto-Bold.ttf   # Vendored font (Apache 2.0 / OFL)
 ├── tests/
-│   ├── test_renderer.py   # Renderer shape/pixel/mask tests
-│   └── test_integrity.py  # Integrity disqualification tests
+│   ├── test_renderer.py   # All letters: shape, pixel ranges, masks
+│   └── test_integrity.py  # Integrity triggers and “simple letter” checks
 └── server/
     ├── __init__.py        # Server module exports
     ├── app.py             # FastAPI app (HTTP + WebSocket + Gradio UI)
     ├── renderer.py        # Font rendering + disqualification masks
-    ├── learn_handwriting_environment.py  # Core RL environment logic
-    └── Dockerfile         # Container image definition
+    └── learn_handwriting_environment.py  # Core RL environment (TASK_CHARACTERS, step/reset)
 ```

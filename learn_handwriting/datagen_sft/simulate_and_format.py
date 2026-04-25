@@ -10,6 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from server.learn_handwriting_environment import LearnHandwritingEnvironment, TASK_CHARACTERS, MAX_STROKES
 from models import LearnHandwritingAction
 from datagen_sft.generator import get_augmented_episodes
+from datagen_sft.oracle import ORACLE_GEOMETRIES
 
 # System Prompt MUST exactly match inference.py
 MAX_DRAWN_MULTIPLIER = float(os.getenv("MAX_DRAWN_MULTIPLIER", "1.7"))
@@ -36,7 +37,10 @@ SYSTEM_PROMPT = textwrap.dedent(f"""
     SHAPE INTEGRITY — protected regions you must NOT fill in:
     - A: inner triangle hole (the counter between the two legs and crossbar)
     - B: two enclosed lobe holes (upper and lower bumps)
+    - D: interior of the D bowl (semicircle counter — outline only, like O)
     - O: circle interior (do not fill the hole)
+    - P: bowl interior (do not fill the hole in the loop)
+    - R: bowl interior (do not fill the hole above the diagonal leg)
     - C: right-side opening (do not close it — that would make O)
     - S: two bridge gaps (do not connect the loops — that would make 8)
     - G: right-side opening (do not close it — that would make O)
@@ -150,19 +154,30 @@ def main():
         for char in char_list:
             # Re-seed the env so reset(task) can pick the char? Actually, LearnHandwritingEnvironment
             # picks random char from pool. We can force it by temporarily overriding the pool.
-            env._char_pool = [char]
-            
-            # Reset to get the bbox for this character
-            obs = env.reset(task=task_name)
+            # Pin ``character=char`` so reset(task=...) does not replace the pool then sample
+            # a different letter (would misalign oracle strokes vs target).
+            obs = env.reset(task=task_name, character=char)
             bbox = (obs.char_bbox_x1, obs.char_bbox_y1, obs.char_bbox_x2, obs.char_bbox_y2)
             
-            episodes = get_augmented_episodes(char, bbox, num_augments=5)
+            # scale_and_jitter doubles each logical stroke; long oracles need more samples to hit 90%.
+            n_logical = len(ORACLE_GEOMETRIES.get(char, []))
+            if n_logical >= 7:
+                num_augments = 20
+            elif n_logical >= 6:
+                num_augments = 12
+            elif n_logical >= 4:
+                num_augments = 12
+            elif n_logical >= 2:
+                num_augments = 15
+            else:
+                num_augments = 8
+            episodes = get_augmented_episodes(char, bbox, num_augments=num_augments)
             print(f" - Character '{char}': Found {len(episodes)} augmented trajectories.")
             
             for ep_idx, generated_strokes in enumerate(episodes):
                 total_episodes_attempted += 1
                 
-                obs = env.reset(task=task_name)
+                obs = env.reset(task=task_name, character=char)
                 history = []
                 messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                 

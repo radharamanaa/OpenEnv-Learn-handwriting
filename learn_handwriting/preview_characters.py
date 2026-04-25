@@ -1,5 +1,5 @@
 """
-Renders all 13 task characters and their disqualification masks to images/
+Renders all task characters and their disqualification masks to images/
 for visual inspection.
 
 Run from the project root:
@@ -22,7 +22,10 @@ SCALE = 6  # 100×100 → 600×600 for easy viewing
 OUT_DIR = Path(__file__).parent / "images"
 OUT_DIR.mkdir(exist_ok=True)
 
-ALL_CHARS = ["L", "T", "V", "X", "A", "N", "Z", "E", "B", "C", "S", "O", "G", "Q"]
+ALL_CHARS = [
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+]
 
 
 def arr_to_rgb(arr: np.ndarray, fg=(255, 255, 255), bg=(30, 30, 30)) -> Image.Image:

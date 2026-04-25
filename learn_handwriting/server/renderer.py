@@ -117,7 +117,7 @@ def _build_disqualification_masks() -> None:
             DISQUALIFICATION_MASKS[good_char] = [mask]
 
     # Flood-fill interior masks: enclosed counter regions the agent must not fill.
-    for char in ["A", "B", "O", "Q"]:
+    for char in ["A", "B", "D", "O", "P", "Q", "R"]:
         target = render_target_character(char)
         filled = flood_fill_interior(target)
         interior = np.clip(filled.astype(np.int16) - target.astype(np.int16), 0, 1).astype(np.uint8)

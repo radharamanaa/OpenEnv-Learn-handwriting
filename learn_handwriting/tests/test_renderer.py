@@ -13,25 +13,40 @@ from server.renderer import (
     render_target_character,
 )
 
-ALL_CHARS = ["L", "T", "V", "X", "A", "N", "Z", "E", "B", "C", "S", "O", "G", "Q"]
-INTEGRITY_CHARS = ["A", "B", "C", "S", "O", "G", "Q"]
+ALL_CHARS = [
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+]
+INTEGRITY_CHARS = ["A", "B", "C", "D", "G", "O", "P", "Q", "R", "S"]
 
 # Expected foreground pixel count ranges per character
 PIXEL_RANGES: dict[str, tuple[int, int]] = {
-    "L": (800, 1800),
-    "T": (800, 1800),
-    "V": (800, 1800),
-    "X": (900, 2000),
     "A": (1200, 2500),
-    "N": (1200, 2500),
-    "Z": (1000, 2200),
-    "E": (1200, 2500),
     "B": (1500, 3000),
     "C": (800, 1800),
-    "S": (1200, 2500),
-    "O": (1200, 2500),
+    "D": (1350, 1750),
+    "E": (1200, 2500),
+    "F": (950, 1300),
     "G": (1000, 2200),
+    "H": (1350, 1750),
+    "I": (550, 850),
+    "J": (800, 1100),
+    "K": (1350, 1750),
+    "L": (800, 1800),
+    "M": (2000, 2500),
+    "N": (1200, 2500),
+    "O": (1200, 2500),
+    "P": (1200, 1550),
     "Q": (1200, 2800),
+    "R": (1450, 1800),
+    "S": (1200, 2500),
+    "T": (800, 1800),
+    "U": (1200, 1650),
+    "V": (800, 1800),
+    "W": (1900, 2400),
+    "X": (900, 2000),
+    "Y": (950, 1250),
+    "Z": (1000, 2200),
 }
 
 # Minimum meaningful size for each disqualification mask.
@@ -40,10 +55,13 @@ MASK_MINIMUMS: dict[str, int] = {
     "A": 150,   # triangle interior (~161px actual)
     "B": 150,   # each lobe — checked per-component (~236 / 276px actual)
     "C": 100,   # right-arc diff vs O (~364px actual)
+    "D": 400,   # D-bowl interior (~682px actual)
     "S": 80,    # each bridge diff vs 8 (~279px actual — single combined mask)
     "O": 750,   # circle interior (~825px actual; bold strokes reduce the hole)
     "G": 100,   # right-arc diff vs O (~184px actual)
+    "P": 200,   # bowl interior (~342px actual)
     "Q": 600,   # circle interior (~825px actual; same as O)
+    "R": 180,   # bowl interior (~303px actual)
 }
 
 
@@ -97,7 +115,7 @@ def test_renderer_deterministic():
 
 def test_no_integrity_masks_for_simple_chars():
     """Easy/medium chars with no holes should have no disqualification masks."""
-    simple = ["L", "T", "V", "X", "N", "Z", "E"]
+    simple = ["L", "T", "V", "X", "N", "Z", "E", "F", "H", "I", "K", "M", "W", "Y", "J", "U"]
     for char in simple:
         masks = DISQUALIFICATION_MASKS.get(char, [])
         assert masks == [], f"{char}: unexpected disqualification mask"
