@@ -43,31 +43,21 @@ except ImportError:
 
 try:
     from ..models import LearnHandwritingAction, LearnHandwritingObservation
-    from .learn_handwriting_environment import LearnHandwritingEnvironment, CHARACTERS_DIR
+    from .learn_handwriting_environment import LearnHandwritingEnvironment
+    from .renderer import render_target_character_as_image
 except ImportError:
     from models import LearnHandwritingAction, LearnHandwritingObservation
-    from server.learn_handwriting_environment import LearnHandwritingEnvironment, CHARACTERS_DIR
+    from server.learn_handwriting_environment import LearnHandwritingEnvironment
+    from server.renderer import render_target_character_as_image
 
 import numpy as np
 from PIL import Image
 
 
-def _canvas_to_image(canvas: list, scale: int = 4) -> Image.Image:
-    """Convert the 100x100 binary canvas matrix to an upscaled PIL Image."""
-    arr = np.array(canvas, dtype=np.uint8) * 255  # 0 or 255
+def _canvas_to_image(canvas: list, scale: int = 2) -> Image.Image:
+    """Convert the 100×100 binary canvas matrix to an upscaled PIL Image."""
+    arr = np.array(canvas, dtype=np.uint8) * 255
     img = Image.fromarray(arr, mode="L").resize(
-        (100 * scale, 100 * scale), resample=Image.NEAREST
-    )
-    return img.convert("RGB")
-
-
-def _target_to_image(character: str, scale: int = 4) -> Image.Image:
-    """Load the target character reference image and upscale it."""
-    path = CHARACTERS_DIR / f"{character}.jpg"
-    if not path.exists():
-        # Return a blank image if character file not found
-        return Image.new("RGB", (100 * scale, 100 * scale), color=(200, 200, 200))
-    img = Image.open(path).convert("L").resize(
         (100 * scale, 100 * scale), resample=Image.NEAREST
     )
     return img.convert("RGB")
@@ -82,83 +72,137 @@ def _build_handwriting_ui(web_manager, action_fields, metadata, is_chat_env, tit
             "Goal: cover **90%** of the character's pixels within **15 strokes**."
         )
 
+        # ── Task selector ────────────────────────────────────────────────────
+        with gr.Row():
+            task_dropdown = gr.Dropdown(
+                choices=["easy", "medium", "hard"],
+                value="easy",
+                label="Task Difficulty",
+                scale=1,
+            )
+            gr.HTML(
+                "<p style='margin:auto 0; line-height:2.4em'>"
+                "<b>easy</b>: L T V X &nbsp;|&nbsp; "
+                "<b>medium</b>: A N Z E &nbsp;|&nbsp; "
+                "<b>hard</b>: B C S O G Q</p>"
+            )
+
         # ── State display ────────────────────────────────────────────────────
         with gr.Row():
             target_char   = gr.Textbox(label="🎯 Target Character", interactive=False, scale=1)
-            strokes_info  = gr.Textbox(label="✏️ Strokes Used", interactive=False, scale=1)
+            strokes_info  = gr.Textbox(label="✏️ Actions Used", interactive=False, scale=1)
             coverage      = gr.Textbox(label="📊 Coverage (goal: 90%)", interactive=False, scale=1)
 
         with gr.Row():
-            last_matched  = gr.Number(label="Pixels matched (this stroke)", interactive=False, scale=1)
-            last_reward   = gr.Number(label="⭐ Reward (this stroke)", interactive=False, scale=2, precision=4)
+            last_matched  = gr.Number(label="Pixels matched (last action)", interactive=False, scale=1)
+            ink_remaining = gr.Number(label="💧 Ink Remaining", interactive=False, scale=1)
+            last_reward   = gr.Number(label="⭐ Reward (this action)", interactive=False, scale=1, precision=4)
             done_box      = gr.Textbox(label="Done?", interactive=False, scale=1)
+
+        with gr.Row():
+            integrity_box = gr.Textbox(label="🚨 Integrity Violated?", interactive=False, scale=2)
 
         status_msg = gr.Markdown("_Press Reset to start a new episode._")
 
         # ── Canvas display ───────────────────────────────────────────────────
+        blank_img = Image.new("RGB", (200, 200), color=(20, 20, 20))
         with gr.Row():
-            target_img = gr.Image(label="🎯 Target Character", interactive=False, width=300, height=300)
-            canvas_img = gr.Image(label="🖌️ Current Canvas", interactive=False, width=300, height=300)
+            target_img = gr.Image(label="🎯 Target Character", interactive=False, width=300, height=300, value=blank_img)
+            canvas_img = gr.Image(label="🖌️ Current Canvas", interactive=False, width=300, height=300, value=blank_img)
 
         # ── Action controls ──────────────────────────────────────────────────
-        gr.Markdown("### Stroke Action")
+        gr.Markdown("### Draw Action")
         with gr.Row():
-            x1 = gr.Slider(0, 99, value=10, step=1, label="x1 (start col)")
-            y1 = gr.Slider(0, 99, value=10, step=1, label="y1 (start row)")
-            x2 = gr.Slider(0, 99, value=90, step=1, label="x2 (end col)")
-            y2 = gr.Slider(0, 99, value=90, step=1, label="y2 (end row)")
-            width = gr.Slider(1, 10, value=5, step=1, label="Brush Width (px)")
+            action_type = gr.Dropdown(choices=["line", "curve", "circle", "ellipse"], value="line", label="Action Type")
+        with gr.Row():
+            x1 = gr.Slider(0, 99, value=50, step=1, label="x1 (Start / Center X)")
+            y1 = gr.Slider(0, 99, value=50, step=1, label="y1 (Start / Center Y)")
+            x2 = gr.Slider(0, 99, value=50, step=1, label="x2 (End X)")
+            y2 = gr.Slider(0, 99, value=50, step=1, label="y2 (End Y)")
+        with gr.Row():
+            x3 = gr.Slider(0, 99, value=50, step=1, label="x3 (Pass-through X)")
+            y3 = gr.Slider(0, 99, value=50, step=1, label="y3 (Pass-through Y)")
+            radius = gr.Slider(1, 100, value=20, step=1, label="Radius (circle)")
+            rx = gr.Slider(1, 100, value=20, step=1, label="rx (ellipse)")
+            ry = gr.Slider(1, 100, value=40, step=1, label="ry (ellipse)")
 
         with gr.Row():
             reset_btn = gr.Button("🔄 Reset", variant="secondary")
-            step_btn  = gr.Button("▶️ Step (draw stroke)", variant="primary")
+            step_btn  = gr.Button("▶️ Step (draw shape)", variant="primary")
 
         # ── Helpers ──────────────────────────────────────────────────────────
         def _parse(data: dict):
-            obs   = data.get("observation", {})
-            char  = obs.get("target_character", "?")
-            used  = obs.get("strokes_used", 0)
-            pct   = obs.get("match_percentage", 0.0)
-            px    = obs.get("pixels_matched_this_stroke", 0)
-            rew   = data.get("reward") or 0.0
-            done  = data.get("done", False)
+            obs       = data.get("observation", {})
+            char      = obs.get("target_character", "?")
+            used      = obs.get("strokes_used", 0)
+            pct       = obs.get("match_percentage", 0.0)
+            px        = obs.get("pixels_matched_this_stroke", 0)
+            ink_rem   = obs.get("ink_remaining", 0)
+            rew       = data.get("reward") or 0.0
+            done      = data.get("done", False)
+            integrity = obs.get("integrity_violated", False)
             return (
                 char,
                 f"{used} / 15",
                 f"{pct:.1%}",
                 px,
+                ink_rem,
                 round(float(rew), 4),
                 "✅ Yes" if done else "❌ No",
+                "🚨 YES — shape integrity violated, episode ended" if integrity else "✅ No violation",
             )
 
-        def _get_images(char: str):
-            state = web_manager.get_state()
-            canvas = state.get("canvas", [[0] * 100 for _ in range(100)])
-            return _target_to_image(char), _canvas_to_image(canvas)
+        async def _get_images(char: str):
+            # Target is rendered directly from font — no server call needed.
+            tgt_img = render_target_character_as_image(char, scale=2)
+            # Canvas requires the server state (accumulated strokes).
+            # get_state() is synchronous — do NOT await it.
+            try:
+                state = web_manager.get_state()
+                canvas = state.get("canvas", [[0] * 100 for _ in range(100)])
+            except Exception:
+                canvas = [[0] * 100 for _ in range(100)]
+            return tgt_img, _canvas_to_image(canvas, scale=2)
 
-        async def on_reset():
-            data = await web_manager.reset_environment()
-            char, strokes, cov, px, rew, done = _parse(data)
-            tgt_img, cvs_img = _get_images(char)
-            return char, strokes, cov, px, rew, done, "_Episode started. Draw your first stroke!_", tgt_img, cvs_img
+        async def on_reset(task: str):
+            data = await web_manager.reset_environment({"task": task})
+            char, strokes, cov, px, ink_rem, rew, done, integrity = _parse(data)
+            tgt_img, cvs_img = await _get_images(char)
+            return char, strokes, cov, px, ink_rem, rew, done, integrity, f"_Episode started ({task}). Draw your first shape!_", tgt_img, cvs_img
 
-        async def on_step(x1v, y1v, x2v, y2v, wv):
-            action = {"x1": int(x1v), "y1": int(y1v), "x2": int(x2v), "y2": int(y2v), "width": int(wv)}
+        async def on_step(act_type, x1v, y1v, x2v, y2v, x3v, y3v, rad_v, rx_v, ry_v):
+            action = {"action_type": act_type, "x1": int(x1v), "y1": int(y1v)}
+            if act_type in ["line", "curve"]:
+                action.update({"x2": int(x2v), "y2": int(y2v)})
+            if act_type == "curve":
+                action.update({"x3": int(x3v), "y3": int(y3v)})
+            if act_type == "circle":
+                action.update({"radius": int(rad_v)})
+            if act_type == "ellipse":
+                action.update({"rx": int(rx_v), "ry": int(ry_v)})
+
             data = await web_manager.step_environment(action)
-            char, strokes, cov, px, rew, done = _parse(data)
-            msg = "🎉 Episode complete!" if data.get("done") else f"_Stroke sent. Coverage: {cov}_"
-            tgt_img, cvs_img = _get_images(char)
-            return char, strokes, cov, px, rew, done, msg, tgt_img, cvs_img
+            char, strokes, cov, px, ink_rem, rew, done, integrity = _parse(data)
+            if data.get("observation", {}).get("integrity_violated"):
+                msg = "🚨 Integrity violated — episode ended!"
+            elif data.get("done"):
+                msg = "🎉 Episode complete!"
+            else:
+                msg = f"_Action sent. Coverage: {cov}_"
+            tgt_img, cvs_img = await _get_images(char)
+            return char, strokes, cov, px, ink_rem, rew, done, integrity, msg, tgt_img, cvs_img
 
-        outputs = [target_char, strokes_info, coverage, last_matched, last_reward, done_box, status_msg, target_img, canvas_img]
+        outputs = [
+            target_char, strokes_info, coverage, last_matched, ink_remaining,
+            last_reward, done_box, integrity_box, status_msg, target_img, canvas_img,
+        ]
 
-        reset_btn.click(fn=on_reset, inputs=[], outputs=outputs)
-        step_btn.click(fn=on_step, inputs=[x1, y1, x2, y2, width], outputs=outputs)
+        reset_btn.click(fn=on_reset, inputs=[task_dropdown], outputs=outputs)
+        step_btn.click(fn=on_step, inputs=[action_type, x1, y1, x2, y2, x3, y3, radius, rx, ry], outputs=outputs)
 
     return blocks
 
 
-# Create the app with web interface and README integration
 app = create_app(
     LearnHandwritingEnvironment,
     LearnHandwritingAction,
@@ -172,15 +216,6 @@ app = create_app(
 def main(host: str = "0.0.0.0", port: int = 8000):
     """
     Entry point for direct execution via uv run or python -m.
-
-    This function enables running the server without Docker:
-        uv run --project . server
-        uv run --project . server --port 8001
-        python -m learn_handwriting.server.app
-
-    Args:
-        host: Host address to bind to (default: "0.0.0.0")
-        port: Port number to listen on (default: 8000)
 
     For production deployments, consider using uvicorn directly with
     multiple workers:

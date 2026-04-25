@@ -14,10 +14,12 @@ version = "0.1.0"
 description = "Learn Handwriting environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
+    "matplotlib>=3.10.9",
     "numpy>=2.2.6",
     # Core OpenEnv runtime (provides FastAPI server + HTTP client types)
     # install from github
     # "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git",
+    "opencv-python-headless>=4.13.0.92",
     "openenv-core[core]>=0.2.2",
     # Environment-specific dependencies
     # Add all dependencies needed for your environment here
@@ -45,3 +47,8 @@ server = "learn_handwriting.server.app:main"
 include-package-data = true
 packages = ["learn_handwriting", "learn_handwriting.server"]
 package-dir = { "learn_handwriting" = ".", "learn_handwriting.server" = "server" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

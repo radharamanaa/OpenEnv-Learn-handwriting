@@ -8,18 +8,18 @@
 Learn Handwriting Environment Implementation.
 
 The agent draws a target character on a 100x100 canvas by issuing strokes.
-Each stroke draws a Bresenham line on a temporary matrix, computes its
-intersection with the target character image for the reward, then merges
-it into the cumulative canvas. The episode ends when 90% of the target
-pixels are covered or 15 strokes have been used.
+Each stroke draws a shape on a temporary matrix, computes its intersection
+with the target character image for the reward, then merges it into the
+cumulative canvas. The episode ends when 90% of the target pixels are
+covered, 15 strokes have been used, or an ink / integrity limit is hit.
 """
 
+import os
 import random
-from pathlib import Path
 from uuid import uuid4
 
+import cv2
 import numpy as np
-from PIL import Image, ImageDraw
 
 from openenv.core.env_server.interfaces import Environment
 
@@ -28,35 +28,74 @@ try:
 except ImportError:
     from models import LearnHandwritingAction, LearnHandwritingObservation, LearnHandwritingState  # noqa: E402
 
-CHARACTERS_DIR = Path(__file__).parent.parent / "characters"
+try:
+    from .renderer import (
+        BRUSH_WIDTH,
+        DISQUALIFICATION_MASKS,
+        INTEGRITY_THRESHOLD,
+        render_target_character,
+        compute_character_bbox,
+    )
+except ImportError:
+    from server.renderer import (  # noqa: E402
+        BRUSH_WIDTH,
+        DISQUALIFICATION_MASKS,
+        INTEGRITY_THRESHOLD,
+        render_target_character,
+        compute_character_bbox,
+    )
+
 MAX_STROKES = 15
 MATCH_THRESHOLD = 0.90
 
-# Task difficulty pools — ordered by geometric complexity for straight-line stroke agents.
+# Task difficulty pools — ordered by geometric complexity.
 #
-# Difficulty rationale:
-#   easy   → L only.  L is two perpendicular straight lines; a perfect agent
-#             needs exactly 2 strokes.  Unambiguously the simplest character.
-#   medium → V, Z, A.  All composed of straight diagonal/horizontal lines that
-#             a line-drawing agent can hit efficiently.  No curves.
-#   hard   → C, B, O.  All involve arcs or bumps.  Straight strokes can only
-#             approximate curves, so coverage per stroke is inherently lower.
-#             Note: C was incorrectly placed in "easy" — it is geometrically
-#             harder than A, V, or Z because it is a curved arc, not a polyline.
+# easy   → pure straight-line characters; a perfect agent needs ≤ 2 strokes.
+# medium → straight lines but 3+ strokes, or mild complexity; no curves.
+# hard   → curves, open gaps, enclosed counters, or complex topology.
+#           These characters also carry shape-integrity constraints (see renderer.py).
 TASK_CHARACTERS: dict[str, list[str]] = {
-    "easy":   ["L", "V"],
-    "medium": ["B", "A"],
-    "hard":   ["C", "S"],
+    "easy":   ["L", "T", "V", "X"],
+    "medium": ["A", "N", "Z", "E"],
+    "hard":   ["B", "C", "S", "O", "G", "Q"],
 }
 
 
-def _draw_stroke(x1: int, y1: int, x2: int, y2: int, width: int) -> np.ndarray:
-    """Return a 100x100 binary matrix with a thick line drawn using PIL."""
-    img = Image.new("L", (100, 100), 0)
-    draw = ImageDraw.Draw(img)
-    draw.line([(x1, y1), (x2, y2)], fill=255, width=width)
-    arr = np.array(img, dtype=np.int32)
-    return (arr > 0).astype(np.int32)
+def _draw_action(action: LearnHandwritingAction) -> np.ndarray:
+    """Return a 100×100 binary matrix with the drawn shape."""
+    canvas = np.zeros((100, 100), dtype=np.int32)
+    w = BRUSH_WIDTH
+
+    if action.action_type == "circle" and action.radius is not None:
+        cv2.circle(canvas, (int(action.x1), int(action.y1)), int(action.radius), 1, w)
+    elif action.action_type == "ellipse" and action.rx is not None and action.ry is not None:
+        cv2.ellipse(
+            canvas,
+            (int(action.x1), int(action.y1)),
+            (int(action.rx), int(action.ry)),
+            0, 0, 360, 1, w,
+        )
+    elif (
+        action.action_type == "curve"
+        and action.x2 is not None and action.y2 is not None
+        and action.x3 is not None and action.y3 is not None
+    ):
+        cx = 2 * action.x3 - 0.5 * action.x1 - 0.5 * action.x2
+        cy = 2 * action.y3 - 0.5 * action.y1 - 0.5 * action.y2
+        t = np.linspace(0, 1, 50)
+        x = (1 - t) ** 2 * action.x1 + 2 * (1 - t) * t * cx + t ** 2 * action.x2
+        y = (1 - t) ** 2 * action.y1 + 2 * (1 - t) * t * cy + t ** 2 * action.y2
+        pts = np.stack((x, y), axis=1).astype(np.int32).reshape((-1, 1, 2))
+        cv2.polylines(canvas, [pts], isClosed=False, color=1, thickness=w)
+    elif action.action_type == "line" and action.x2 is not None and action.y2 is not None:
+        cv2.line(
+            canvas,
+            (int(action.x1), int(action.y1)),
+            (int(action.x2), int(action.y2)),
+            1, w,
+        )
+
+    return canvas
 
 
 class LearnHandwritingEnvironment(Environment):
@@ -64,14 +103,15 @@ class LearnHandwritingEnvironment(Environment):
     Handwriting RL environment.
 
     The agent receives a target character to draw and issues up to 15 strokes
-    on a 100x100 canvas. Each stroke is evaluated against the target image.
-    The episode succeeds when 90% of the target's white pixels are covered.
+    on a 100×100 canvas. Each stroke is evaluated against the font-rendered
+    target image. The episode succeeds when 90% of the target's pixels are
+    covered; it fails on stroke exhaustion, ink overflow, or integrity violation.
 
     Example:
         >>> env = LearnHandwritingEnvironment()
         >>> obs = env.reset()
         >>> print(obs.target_character)   # e.g. "A"
-        >>> obs = env.step(LearnHandwritingAction(x1=10, y1=10, x2=50, y2=90))
+        >>> obs = env.step(LearnHandwritingAction(action_type="line", x1=10, y1=10, x2=50, y2=90))
         >>> print(obs.reward, obs.match_percentage)
     """
 
@@ -83,23 +123,18 @@ class LearnHandwritingEnvironment(Environment):
             task: Difficulty level — "easy", "medium", or "hard".
                   Controls which characters can be selected on reset().
         """
-        allowed = TASK_CHARACTERS.get(task, TASK_CHARACTERS["easy"])
-        all_paths = sorted(CHARACTERS_DIR.glob("*.jpg"))
-        self._char_paths: list[Path] = [p for p in all_paths if p.stem in allowed]
-        if not self._char_paths:
-            raise ValueError(f"No character images found for task={task!r}. "
-                             f"Expected one of: {list(TASK_CHARACTERS.keys())}")
+        self._char_pool: list[str] = TASK_CHARACTERS.get(task, TASK_CHARACTERS["easy"])
+        if not self._char_pool:
+            raise ValueError(
+                f"No characters found for task={task!r}. "
+                f"Expected one of: {list(TASK_CHARACTERS.keys())}"
+            )
         self._task = task
         self._target_matrix: np.ndarray = np.zeros((100, 100), dtype=np.int32)
         self._total_target_pixels: int = 0
+        self._target_bbox: tuple[int, int, int, int] = (0, 0, 99, 99)
         self._canvas: np.ndarray = np.zeros((100, 100), dtype=np.int32)
         self._state = LearnHandwritingState(episode_id=str(uuid4()), step_count=0)
-
-    def _load_target(self, path: Path) -> np.ndarray:
-        """Load character image as a binary 100x100 matrix (pixel >= 240 → 1)."""
-        img = Image.open(path).convert("L")
-        arr = np.array(img, dtype=np.int32)
-        return (arr >= 240).astype(np.int32)
 
     def reset(self, task: str | None = None) -> LearnHandwritingObservation:
         """Pick a random character, reset the canvas, and return initial observation.
@@ -109,55 +144,80 @@ class LearnHandwritingEnvironment(Environment):
                   If provided, switches the character pool for this and future episodes.
         """
         if task is not None and task != self._task:
-            allowed = TASK_CHARACTERS.get(task, TASK_CHARACTERS["easy"])
-            all_paths = sorted(CHARACTERS_DIR.glob("*.jpg"))
-            new_paths = [p for p in all_paths if p.stem in allowed]
-            if new_paths:
-                self._char_paths = new_paths
+            new_pool = TASK_CHARACTERS.get(task, TASK_CHARACTERS["easy"])
+            if new_pool:
+                self._char_pool = new_pool
                 self._task = task
 
-        char_path = random.choice(self._char_paths)
-        char_name = char_path.stem  # e.g. "A"
-
-        self._target_matrix = self._load_target(char_path)
+        char = random.choice(self._char_pool)
+        self._target_matrix = render_target_character(char).astype(np.int32)
         self._total_target_pixels = int(np.sum(self._target_matrix))
+        self._target_bbox = compute_character_bbox(char)
         self._canvas = np.zeros((100, 100), dtype=np.int32)
+
+        max_drawn_multiplier = float(os.getenv("MAX_DRAWN_MULTIPLIER", "1.7"))
+        max_allowed_pixels = int(max_drawn_multiplier * self._total_target_pixels)
 
         self._state = LearnHandwritingState(
             episode_id=str(uuid4()),
             step_count=0,
-            target_character=char_name,
+            target_character=char,
             strokes_used=0,
             canvas=self._canvas.tolist(),
         )
 
         return LearnHandwritingObservation(
-            target_character=char_name,
+            target_character=char,
             strokes_used=0,
             pixels_matched_this_stroke=0,
             total_matched_pixels=0,
             match_percentage=0.0,
+            pixels_wasted_this_stroke=0,
+            total_drawn_pixels=0,
+            max_allowed_pixels=max_allowed_pixels,
+            ink_remaining=max_allowed_pixels,
+            integrity_violated=False,
+            char_bbox_x1=self._target_bbox[0],
+            char_bbox_y1=self._target_bbox[1],
+            char_bbox_x2=self._target_bbox[2],
+            char_bbox_y2=self._target_bbox[3],
             done=False,
             reward=0.0,
         )
+
+    def _check_integrity_violation(self) -> bool:
+        """
+        Return True if the canvas covers > INTEGRITY_THRESHOLD of any
+        disqualification zone for the current character.
+        Called after every stroke merge.
+        """
+        masks = DISQUALIFICATION_MASKS.get(self._state.target_character, [])
+        for mask in masks:
+            zone_pixels = int(np.sum(mask))
+            if zone_pixels == 0:
+                continue
+            covered = int(np.sum(self._canvas * mask))
+            if covered / zone_pixels > INTEGRITY_THRESHOLD:
+                return True
+        return False
 
     def step(self, action: LearnHandwritingAction) -> LearnHandwritingObservation:  # type: ignore[override]
         """
         Execute one stroke action.
 
         Workflow:
-          1. Draw stroke on a fresh temp_matrix using Bresenham.
+          1. Draw stroke on a fresh temp_matrix.
           2. Intersect temp_matrix with target → pixels_matched_this_stroke → reward.
           3. Merge temp_matrix into canvas via element-wise max.
-          4. Intersect updated canvas with target → total_matched_pixels → match_percentage.
-          5. Increment strokes_used; check done conditions.
+          4. Check shape integrity — episode ends if a protected zone is filled.
+          5. Intersect updated canvas with target → total_matched_pixels → match_percentage.
+          6. Increment strokes_used; check remaining done conditions.
         """
         self._state.step_count += 1
 
-        # Step 1 & 2: draw thick stroke onto temp matrix via PIL
-        temp_matrix = _draw_stroke(action.x1, action.y1, action.x2, action.y2, action.width)
+        temp_matrix = _draw_action(action)
 
-        # Step 3: reward — intersection of this stroke with target
+        # Reward: intersection of this stroke with the target
         pixels_matched_this_stroke = int(np.sum(temp_matrix * self._target_matrix))
         reward = (
             pixels_matched_this_stroke / self._total_target_pixels
@@ -165,10 +225,15 @@ class LearnHandwritingEnvironment(Environment):
             else 0.0
         )
 
-        # Step 4: merge stroke into cumulative canvas
+        # Merge stroke into cumulative canvas
         self._canvas = np.maximum(self._canvas, temp_matrix)
 
-        # Step 5: cumulative match stats
+        # Integrity check — must happen after merge so the canvas reflects this stroke
+        integrity_violated = self._check_integrity_violation()
+        if integrity_violated:
+            reward = 0.0  # no reward for violating shape integrity (grader requires ≥ 0)
+
+        # Cumulative match stats
         total_matched_pixels = int(np.sum(self._canvas * self._target_matrix))
         match_percentage = (
             total_matched_pixels / self._total_target_pixels
@@ -176,13 +241,23 @@ class LearnHandwritingEnvironment(Environment):
             else 0.0
         )
 
-        # Step 6: update stroke count
         strokes_used = self._state.strokes_used + 1
 
-        # Step 7: done conditions
-        done = match_percentage >= MATCH_THRESHOLD or strokes_used >= MAX_STROKES
+        # Ink tracking
+        pixels_drawn_this_stroke = int(np.sum(temp_matrix))
+        pixels_wasted_this_stroke = pixels_drawn_this_stroke - pixels_matched_this_stroke
+        total_drawn_pixels = int(np.sum(self._canvas))
+        max_drawn_multiplier = float(os.getenv("MAX_DRAWN_MULTIPLIER", "1.7"))
+        max_allowed_pixels = int(max_drawn_multiplier * self._total_target_pixels)
+        ink_remaining = max(0, max_allowed_pixels - total_drawn_pixels)
 
-        # Persist into state
+        done = (
+            integrity_violated
+            or match_percentage >= MATCH_THRESHOLD
+            or strokes_used >= MAX_STROKES
+            or total_drawn_pixels > max_allowed_pixels
+        )
+
         self._state.strokes_used = strokes_used
         self._state.canvas = self._canvas.tolist()
 
@@ -192,6 +267,15 @@ class LearnHandwritingEnvironment(Environment):
             pixels_matched_this_stroke=pixels_matched_this_stroke,
             total_matched_pixels=total_matched_pixels,
             match_percentage=match_percentage,
+            pixels_wasted_this_stroke=pixels_wasted_this_stroke,
+            total_drawn_pixels=total_drawn_pixels,
+            max_allowed_pixels=max_allowed_pixels,
+            ink_remaining=ink_remaining,
+            integrity_violated=integrity_violated,
+            char_bbox_x1=self._target_bbox[0],
+            char_bbox_y1=self._target_bbox[1],
+            char_bbox_x2=self._target_bbox[2],
+            char_bbox_y2=self._target_bbox[3],
             done=done,
             reward=reward,
         )

@@ -13,20 +13,31 @@ accumulated strokes in a canvas matrix and compares them against the target
 character image to compute reward and match progress.
 """
 
-from typing import List
+from typing import List, Literal, Optional
 
 from openenv.core.env_server.types import Action, Observation, State
 from pydantic import Field
 
 
 class LearnHandwritingAction(Action):
-    """A single stroke from (x1, y1) to (x2, y2) on the 100x100 canvas."""
+    """A single action (line, curve, circle, ellipse) on the 100x100 canvas."""
 
-    x1: int = Field(..., ge=0, le=99, description="Stroke start x coordinate (0–99)")
-    y1: int = Field(..., ge=0, le=99, description="Stroke start y coordinate (0–99)")
-    x2: int = Field(..., ge=0, le=99, description="Stroke end x coordinate (0–99)")
-    y2: int = Field(..., ge=0, le=99, description="Stroke end y coordinate (0–99)")
-    width: int = Field(default=3, ge=1, le=10, description="Stroke brush width in pixels (1–10)")
+    action_type: Literal["line", "curve", "circle", "ellipse"] = Field(default="line", description="Type of action: 'line', 'curve', 'circle', or 'ellipse'")
+    x1: int = Field(..., ge=0, le=99, description="For 'line' and 'curve': The starting x coordinate. For 'circle' and 'ellipse': The center x coordinate.")
+    y1: int = Field(..., ge=0, le=99, description="For 'line' and 'curve': The starting y coordinate. For 'circle' and 'ellipse': The center y coordinate.")
+    
+    # Optional end coordinates for lines and curves
+    x2: Optional[int] = Field(default=None, ge=0, le=99, description="For 'line' and 'curve': The ending x coordinate. Ignored for 'circle' and 'ellipse'.")
+    y2: Optional[int] = Field(default=None, ge=0, le=99, description="For 'line' and 'curve': The ending y coordinate. Ignored for 'circle' and 'ellipse'.")
+    
+    # Optional pass-through point for curves
+    x3: Optional[int] = Field(default=None, ge=0, le=99, description="For 'curve' only: The x coordinate the curve must pass through. Ignored for others.")
+    y3: Optional[int] = Field(default=None, ge=0, le=99, description="For 'curve' only: The y coordinate the curve must pass through. Ignored for others.")
+    
+    # Optional radii for circle and ellipse
+    radius: Optional[int] = Field(default=None, ge=1, le=100, description="For 'circle' only: The uniform radius of the circle. Ignored for 'ellipse' and others.")
+    rx: Optional[int] = Field(default=None, ge=1, le=100, description="For 'ellipse' only: The horizontal radius. Ignored for 'circle' and others.")
+    ry: Optional[int] = Field(default=None, ge=1, le=100, description="For 'ellipse' only: The vertical radius. Ignored for 'circle' and others.")
 
 
 class LearnHandwritingObservation(Observation):
@@ -50,6 +61,37 @@ class LearnHandwritingObservation(Observation):
         default=0.0,
         description="total_matched_pixels / total_target_pixels — progress toward 90% goal",
     )
+    pixels_wasted_this_stroke: int = Field(
+        default=0,
+        description="Pixels drawn in the last action that missed the target completely",
+    )
+    total_drawn_pixels: int = Field(
+        default=0,
+        description="Total ink drawn on the canvas so far",
+    )
+    max_allowed_pixels: int = Field(
+        default=0,
+        description="Maximum ink allowed before episode fails",
+    )
+    ink_remaining: int = Field(
+        default=0,
+        description="Remaining pixels agent can draw before failing",
+    )
+    integrity_violated: bool = Field(
+        default=False,
+        description=(
+            "True if the last stroke violated a shape integrity constraint. "
+            "This means the agent filled more than 60% of a protected region "
+            "(e.g. the hole in A, the inner loops of B or O, the gap in C, "
+            "the bridges in S, or the opening in G). "
+            "Episode is done when this is True."
+        ),
+    )
+    char_bbox_x1: int = Field(default=0,  description="Left edge (x) of the target character's bounding box on the 100×100 canvas")
+    char_bbox_y1: int = Field(default=0,  description="Top edge (y) of the target character's bounding box on the 100×100 canvas")
+    char_bbox_x2: int = Field(default=99, description="Right edge (x) of the target character's bounding box on the 100×100 canvas")
+    char_bbox_y2: int = Field(default=99, description="Bottom edge (y) of the target character's bounding box on the 100×100 canvas")
+
 
 
 class LearnHandwritingState(State):

@@ -9,3 +9,17 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Roboto font files are committed intentionally (Apache 2.0 / OFL licensed).
+# Only ignore the variable/other weights we don't use.
+Roboto/static/Roboto_Condensed-*.ttf
+Roboto/static/Roboto_SemiCondensed-*.ttf
+Roboto/static/Roboto-*Italic.ttf
+Roboto/static/Roboto-Black.ttf
+Roboto/static/Roboto-ExtraLight*.ttf
+Roboto/static/Roboto-Light*.ttf
+Roboto/static/Roboto-Medium*.ttf
+Roboto/static/Roboto-Regular.ttf
+Roboto/static/Roboto-SemiBold*.ttf
+Roboto/static/Roboto-Thin*.ttf
+Roboto/static/Roboto-ExtraBold*.ttf

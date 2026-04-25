@@ -46,7 +46,7 @@ import asyncio
 import json
 import os
 import textwrap
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -62,6 +62,7 @@ MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
 ALL_TASKS = ["easy", "medium", "hard"]
 BENCHMARK = "learn_handwriting"
 MAX_STEPS = 15
+MAX_DRAWN_MULTIPLIER = os.getenv("MAX_DRAWN_MULTIPLIER", "1.7")
 TEMPERATURE = 0.7
 SUCCESS_SCORE_THRESHOLD = 0.90  # 90% pixel coverage required
 SCORE_MIN = 0.001  # grader rejects score == 0.0  (must be strictly > 0)
@@ -72,38 +73,67 @@ SCORE_MAX = 0.999  # grader rejects score == 1.0  (must be strictly < 1)
 
 class StrokeOutput(BaseModel):
     """Structured stroke action output from the LLM."""
-    reasoning: str = Field(description="Brief explanation of why this stroke was chosen")
-    x1: int = Field(description="Stroke start x coordinate (0–99, left→right)")
-    y1: int = Field(description="Stroke start y coordinate (0–99, top→bottom)")
-    x2: int = Field(description="Stroke end x coordinate (0–99, left→right)")
-    y2: int = Field(description="Stroke end y coordinate (0–99, top→bottom)")
-    width: int = Field(description="Brush width in pixels (1–10)")
+    reasoning: str = Field(description="Brief explanation of why this action and parameters were chosen")
+    action_type: Literal["line", "curve", "circle", "ellipse"] = Field(description="Type of action: 'line', 'curve', 'circle', or 'ellipse'")
+    x1: int = Field(description="For 'line' and 'curve': Start x. For 'circle' and 'ellipse': Center x.")
+    y1: int = Field(description="For 'line' and 'curve': Start y. For 'circle' and 'ellipse': Center y.")
+    x2: Optional[int] = Field(default=None, description="For 'line' and 'curve': End x. Ignored for 'circle' and 'ellipse'.")
+    y2: Optional[int] = Field(default=None, description="For 'line' and 'curve': End y. Ignored for 'circle' and 'ellipse'.")
+    x3: Optional[int] = Field(default=None, description="For 'curve' only: Pass-through midpoint x. Ignored for others.")
+    y3: Optional[int] = Field(default=None, description="For 'curve' only: Pass-through midpoint y. Ignored for others.")
+    radius: Optional[int] = Field(default=None, description="For 'circle' only: Radius. Ignored for 'ellipse' and others.")
+    rx: Optional[int] = Field(default=None, description="For 'ellipse' only: Horizontal radius. Ignored for 'circle' and others.")
+    ry: Optional[int] = Field(default=None, description="For 'ellipse' only: Vertical radius. Ignored for 'circle' and others.")
 
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = textwrap.dedent("""
-    You are drawing capital letters on a 100×100 pixel canvas using straight strokes.
+SYSTEM_PROMPT = textwrap.dedent(f"""
+    You are drawing capital letters on a 100×100 pixel canvas.
 
     Canvas coordinate system:
     - x: 0 (left) → 99 (right)
     - y: 0 (top)  → 99 (bottom)
     - Origin (0,0) is the TOP-LEFT corner
 
-    Each action is one straight stroke: a line from (x1,y1) to (x2,y2) with a brush of given width (1–10px).
-    The stroke pixels are compared against the target character image to compute reward.
+    You can draw lines, curves, circles, and ellipses using these action types:
+    - "line": Straight line from (x1,y1) to (x2,y2).
+    - "curve": A curve starting at (x1,y1), ending at (x2,y2), and passing through a midpoint at (x3,y3).
+    - "circle": A circle centered at (x1,y1) with given `radius`.
+    - "ellipse": An upright oval centered at (x1,y1) with horizontal radius `rx` and vertical radius `ry`.
 
     Rules:
-    - You have at most 15 strokes per episode.
+    - You have at most 15 actions per episode.
     - Goal: cover 90% of the target character's white pixels.
-    - Use wider strokes (width 6–8) for thick bars, narrower (width 3–4) for thin parts.
-    - Think about the skeleton of the letter and plan strokes along its main lines.
-    - All coordinates must be integers between 0 and 99.
-    - Width must be an integer between 1 and 10.
+    - INK PENALTY: You will fail the episode instantly if you draw more than {MAX_DRAWN_MULTIPLIER}x the target's total pixels. Do not waste ink!
+    - Coordinates are integers 0-99.
+
+    SHAPE INTEGRITY — protected regions you must NOT fill in:
+    - A: inner triangle hole (the counter between the two legs and crossbar)
+    - B: two enclosed lobe holes (upper and lower bumps)
+    - O: circle interior (do not fill the hole)
+    - C: right-side opening (do not close it — that would make O)
+    - S: two bridge gaps (do not connect the loops — that would make 8)
+    - G: right-side opening (do not close it — that would make O)
+    - Q: circle interior (same as O — do not fill the hole; draw the tail as a separate stroke)
+    If you cover more than 60% of a protected region the episode ends immediately
+    with reward=0 and integrity_violated=True. Plan your strokes to follow the
+    character outline only, never filling in holes or closing open gaps.
 
     You MUST respond with a valid JSON object and nothing else. No markdown, no explanation outside the JSON.
-    Format:
-    {"reasoning": "<brief explanation>", "x1": <int>, "y1": <int>, "x2": <int>, "y2": <int>, "width": <int>}
+
+    Sample Invocations:
+    - To draw a vertical line on the left side:
+      {{"reasoning": "Drawing the vertical spine of the letter D", "action_type": "line", "x1": 20, "y1": 10, "x2": 20, "y2": 90}}
+
+    - To draw a curved right side of a D (starts top, ends bottom, bows out to x=80):
+      {{"reasoning": "Drawing the curved belly of the letter D", "action_type": "curve", "x1": 20, "y1": 10, "x2": 20, "y2": 90, "x3": 80, "y3": 50}}
+
+    - To draw a perfect circle for an O:
+      {{"reasoning": "Drawing the letter O using a circle centered in the canvas", "action_type": "circle", "x1": 50, "y1": 50, "radius": 40}}
+
+    - To draw a tall, narrow oval:
+      {{"reasoning": "Drawing a tall vertical ellipse", "action_type": "ellipse", "x1": 50, "y1": 50, "rx": 20, "ry": 40}}
 """).strip()
 
 
@@ -113,22 +143,38 @@ def build_user_prompt(
     strokes_remaining: int,
     match_percentage: float,
     last_pixels_matched: int,
+    last_pixels_wasted: int,
+    ink_remaining: int,
     last_reward: float,
     history: List[str],
+    last_integrity_violated: bool = False,
+    char_bbox: Optional[tuple[int, int, int, int]] = None,
 ) -> str:
     history_block = "\n".join(history[-5:]) if history else "None yet"
+    integrity_warning = (
+        "\n⚠️  LAST ACTION VIOLATED SHAPE INTEGRITY — episode ended with reward=0."
+        if last_integrity_violated else ""
+    )
+    bbox_info = (
+        f"Bounding Box: x=[{char_bbox[0]}→{char_bbox[2]}], y=[{char_bbox[1]}→{char_bbox[3]}]\n"
+        if char_bbox else ""
+    )
     return textwrap.dedent(f"""
         Draw the capital letter: {target_character}
-
+        {bbox_info}
         Step: {step} / {MAX_STEPS}
-        Strokes remaining: {strokes_remaining}
+        Actions remaining: {strokes_remaining}
         Current coverage: {match_percentage:.1%} (goal: 90%)
-        Last stroke matched: {last_pixels_matched} pixels (reward: {last_reward:.4f})
 
-        Stroke history (most recent last):
+        FEEDBACK ON LAST ACTION:
+        - Pixels matched: {last_pixels_matched}
+        - Pixels wasted (missed target): {last_pixels_wasted}
+        - Ink remaining before failure: {ink_remaining}{integrity_warning}
+
+        Action history:
         {history_block}
 
-        Plan your next stroke to maximise coverage of letter '{target_character}'.
+        Plan your next action to maximise coverage of '{target_character}' without wasting ink or violating shape integrity.
     """).strip()
 
 
@@ -157,12 +203,15 @@ def get_stroke(
     target_character: str,
     match_percentage: float,
     last_pixels_matched: int,
+    last_pixels_wasted: int,
+    ink_remaining: int,
     last_reward: float,
     history: List[str],
 ) -> StrokeOutput:
     user_prompt = build_user_prompt(
         target_character, step, strokes_remaining,
-        match_percentage, last_pixels_matched, last_reward, history,
+        match_percentage, last_pixels_matched, last_pixels_wasted, ink_remaining,
+        last_reward, history,
     )
     try:
         completion = client.chat.completions.create(
@@ -178,23 +227,32 @@ def get_stroke(
         data = json.loads(raw)
         stroke = StrokeOutput(
             reasoning=data.get("reasoning", ""),
+            action_type=data.get("action_type", "line"),
             x1=int(data.get("x1", 10)),
             y1=int(data.get("y1", 10)),
-            x2=int(data.get("x2", 90)),
-            y2=int(data.get("y2", 90)),
-            width=int(data.get("width", 5)),
+            x2=int(data.get("x2")) if data.get("x2") is not None else None,
+            y2=int(data.get("y2")) if data.get("y2") is not None else None,
+            x3=int(data.get("x3")) if data.get("x3") is not None else None,
+            y3=int(data.get("y3")) if data.get("y3") is not None else None,
+            radius=int(data.get("radius")) if data.get("radius") is not None else None,
+            rx=int(data.get("rx")) if data.get("rx") is not None else None,
+            ry=int(data.get("ry")) if data.get("ry") is not None else None,
         )
         # Clamp to valid ranges defensively
         stroke.x1 = max(0, min(99, stroke.x1))
         stroke.y1 = max(0, min(99, stroke.y1))
-        stroke.x2 = max(0, min(99, stroke.x2))
-        stroke.y2 = max(0, min(99, stroke.y2))
-        stroke.width = max(1, min(10, stroke.width))
+        if stroke.x2 is not None: stroke.x2 = max(0, min(99, stroke.x2))
+        if stroke.y2 is not None: stroke.y2 = max(0, min(99, stroke.y2))
+        if stroke.x3 is not None: stroke.x3 = max(0, min(99, stroke.x3))
+        if stroke.y3 is not None: stroke.y3 = max(0, min(99, stroke.y3))
+        if stroke.radius is not None: stroke.radius = max(1, min(100, stroke.radius))
+        if stroke.rx is not None: stroke.rx = max(1, min(100, stroke.rx))
+        if stroke.ry is not None: stroke.ry = max(1, min(100, stroke.ry))
         return stroke
     except Exception as exc:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        # Safe fallback: diagonal stroke across the canvas
-        return StrokeOutput(reasoning="fallback", x1=10, y1=10, x2=90, y2=90, width=5)
+        # Safe fallback: diagonal line across the canvas
+        return StrokeOutput(reasoning="fallback", action_type="line", x1=10, y1=10, x2=90, y2=90)
 
 
 # ── Single-task episode loop ─────────────────────────────────────────────────
@@ -226,37 +284,58 @@ async def run_task(task_name: str, env: LearnHandwritingEnv, client: OpenAI) -> 
         obs = result.observation
         target_character = obs.target_character
         last_pixels_matched = 0
+        last_pixels_wasted = 0
+        ink_remaining = getattr(obs, "ink_remaining", 1000)
         last_reward = 0.0
+        last_integrity_violated = False
 
         for step in range(1, MAX_STEPS + 1):
             if result.done:
                 break
 
             strokes_remaining = MAX_STEPS - step + 1
+            bbox = (obs.char_bbox_x1, obs.char_bbox_y1, obs.char_bbox_x2, obs.char_bbox_y2)
             stroke = get_stroke(
                 client, step, strokes_remaining, target_character,
-                obs.match_percentage, last_pixels_matched, last_reward, history,
+                obs.match_percentage, last_pixels_matched, last_pixels_wasted,
+                ink_remaining, last_reward, history,
+                last_integrity_violated, bbox,
             )
 
-            action_str = f"stroke({stroke.x1},{stroke.y1},{stroke.x2},{stroke.y2},w={stroke.width})"
+            if stroke.action_type == "circle":
+                action_str = f"circle({stroke.x1},{stroke.y1},r={stroke.radius})"
+            elif stroke.action_type == "ellipse":
+                action_str = f"ellipse({stroke.x1},{stroke.y1},rx={stroke.rx},ry={stroke.ry})"
+            elif stroke.action_type == "curve":
+                action_str = f"curve({stroke.x1},{stroke.y1},{stroke.x2},{stroke.y2},{stroke.x3},{stroke.y3})"
+            else:
+                action_str = f"line({stroke.x1},{stroke.y1},{stroke.x2},{stroke.y2})"
+
             result = await env.step(LearnHandwritingAction(
+                action_type=stroke.action_type,
                 x1=stroke.x1, y1=stroke.y1,
                 x2=stroke.x2, y2=stroke.y2,
-                width=stroke.width,
+                x3=stroke.x3, y3=stroke.y3,
+                radius=stroke.radius,
+                rx=stroke.rx, ry=stroke.ry,
             ))
             obs = result.observation
             reward = result.reward or 0.0
             done = result.done
             match_percentage = obs.match_percentage
             last_pixels_matched = obs.pixels_matched_this_stroke
+            last_pixels_wasted = getattr(obs, "pixels_wasted_this_stroke", 0)
+            ink_remaining = getattr(obs, "ink_remaining", 0)
+            last_integrity_violated = getattr(obs, "integrity_violated", False)
             last_reward = reward
 
             rewards.append(reward)
             steps_taken = step
             log_step(step=step, action=action_str, reward=reward, done=done, error=None)
+            integrity_tag = " [INTEGRITY VIOLATED]" if last_integrity_violated else ""
             history.append(
                 f"Step {step}: {action_str} → matched={last_pixels_matched}px "
-                f"reward={reward:.4f} coverage={match_percentage:.1%}"
+                f"reward={reward:.4f} coverage={match_percentage:.1%}{integrity_tag}"
             )
 
             if done:
