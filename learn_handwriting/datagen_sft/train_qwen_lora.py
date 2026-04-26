@@ -3,7 +3,8 @@
 LoRA fine-tune Qwen2.5 Instruct on `qwen25_finetune_data.jsonl` (multi-turn JSON strokes).
 
 Install (example):
-  pip install torch transformers trl peft accelerate datasets
+  pip install torch transformers "trl>=0.16" peft accelerate datasets
+  (TRL 0.16+ uses SFTConfig(max_length=...); older TRL used max_seq_length — this script supports both.)
 
 Run from repo root:
   PYTHONPATH=. python datagen_sft/train_qwen_lora.py
@@ -96,7 +97,20 @@ def main() -> None:
     from datasets import load_dataset
     from peft import LoraConfig
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    import inspect
+
     from trl import SFTTrainer, SFTConfig
+
+    # TRL: max_seq_length on SFTConfig was renamed to max_length (0.16+) and the old name removed in 1.x
+    _sft_init = inspect.signature(SFTConfig.__init__)
+    if "max_length" in _sft_init.parameters:
+        _max_len_kw = {"max_length": args.max_seq_length}
+    elif "max_seq_length" in _sft_init.parameters:
+        _max_len_kw = {"max_seq_length": args.max_seq_length}
+    else:
+        raise SystemExit(
+            "SFTConfig has neither max_length nor max_seq_length; install a supported trl, e.g. pip install -U 'trl>=0.16'"
+        )
 
     # --- Device Discovery ---
     if torch.cuda.is_available():
@@ -187,7 +201,7 @@ def main() -> None:
     training_args = SFTConfig(
         output_dir=args.output_dir,
         dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
+        **_max_len_kw,
         num_train_epochs=args.num_train_epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,

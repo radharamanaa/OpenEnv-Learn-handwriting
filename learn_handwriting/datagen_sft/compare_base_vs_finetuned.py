@@ -7,16 +7,17 @@ This script supports:
 2. Local in-process inference (Transformers + PEFT).
 3. High-efficiency adapter swapping (benchmarking multiple LoRAs without reloading the base model).
 
-Example (Local/RunPod):
+Example (local base + LoRA folders; quote the glob so the shell does not expand it first):
   PYTHONPATH=. python datagen_sft/compare_base_vs_finetuned.py \
-    --model_dirs outputs/rev-r* \
+    --model_dirs 'outputs/rev-r*' \
     --suite quick
 
-Example (API):
+Example (Hugging Face Inference / OpenAI-style API: hub model ids, no local GPU):
   export HF_TOKEN=...
   PYTHONPATH=. python datagen_sft/compare_base_vs_finetuned.py \
     --base_model Qwen/Qwen2.5-7B-Instruct \
-    --finetuned_model <hub-id>
+    --finetuned_model <hub-id> \
+    --suite quick
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import glob
 import json
 import os
 import sys
+from types import SimpleNamespace
 from typing import Any, List, Optional
 
 import torch
@@ -77,6 +79,15 @@ from server.learn_handwriting_environment import (  # noqa: E402
 
 # ── Local Model Client (Mimics OpenAI for Transformers) ──────────────────────
 
+
+def _is_local_model_path(path: str) -> bool:
+    """True if ``path`` is an on-disk file or directory (not a Hub id like ``org/model``)."""
+    if not (path and path.strip()):
+        return False
+    expanded = os.path.normpath(os.path.expanduser(path))
+    return os.path.isdir(expanded) or os.path.isfile(expanded)
+
+
 class LocalModelClient:
     def __init__(self, model_id_or_path: str, revision: str = "main"):
         # --- Device Discovery ---
@@ -104,7 +115,13 @@ class LocalModelClient:
             revision=revision
         )
         self.model.eval()
-        self.chat_completions = self
+        # Match OpenAI client: get_stroke() calls client.chat.completions.create(...)
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._openai_create_chat_completion)
+        )
+
+    def _param_device(self):
+        return next(self.model.parameters()).device
 
     def load_lora(self, lora_path: str, adapter_name: str):
         """Loads or switches to a specific LoRA adapter."""
@@ -125,9 +142,18 @@ class LocalModelClient:
             # A safer way to 'disable' is model.base_model.disable_adapter_layers() 
             # but for benchmarking, we usually just set to a different one or use 'default'
 
-    def create(self, model: str, messages: list, temperature: float, response_format: dict):
+    def _openai_create_chat_completion(
+        self,
+        *,
+        model: str,
+        messages: list,
+        temperature: float = 0.7,
+        response_format: dict | None = None,
+        **kwargs: Any,
+    ):
+        """Mimic ``openai.OpenAI().chat.completions.create`` (keyword args only, like the real client)."""
         text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+        inputs = self.tokenizer(text, return_tensors="pt").to(self._param_device())
 
         with torch.no_grad():
             outputs = self.model.generate(
@@ -288,9 +314,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Determine inference mode
-    is_local = args.model_dirs or "/" in args.base_model or os.path.exists(args.base_model)
-    
+    # Local mode: --model_dirs (LoRA sweeps) or a base path on disk. Hub ids (e.g. Qwen/...) are not local
+    # even though they contain "/" — a previous `"/" in base_model` check wrongly forced local inference.
+    is_local = bool(args.model_dirs) or _is_local_model_path(args.base_model)
+
     if is_local:
         client = LocalModelClient(args.base_model)
     else:
