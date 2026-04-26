@@ -1,11 +1,27 @@
 [project]
 name = "scaler-8-april"
 version = "0.1.0"
-description = "Add your description here"
+description = "Scalability hackathon project for handwriting learning"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
-    "numpy>=2.4.4",
-    "openenv-core[cli]>=0.2.3",
+    "matplotlib>=3.10.9",
+    "numpy>=2.2.6",
+    "opencv-python-headless>=4.13.0.92",
+    "openenv-core[core]>=0.2.2",
     "pillow>=12.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+train = [
+    "torch>=2.2.0",
+    "transformers>=4.44.0",
+    "trl>=0.9.0",
+    "peft>=0.12.0",
+    "accelerate>=0.33.0",
+    "datasets>=2.20.0",
 ]
