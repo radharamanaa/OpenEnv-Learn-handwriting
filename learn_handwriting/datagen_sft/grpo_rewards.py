@@ -106,6 +106,10 @@ def openenv_stroke_list_reward(
     """
     TRL ``reward_funcs`` entry: one OpenEnv roll-out per (prompt, completion) pair.
 
+    TRL 1.2+ also passes (ignore unless you need them): ``completion_ids``, ``trainer_state``,
+    ``log_extra``, ``log_metric``, and sometimes ``environments`` — use ``**kwargs`` and only read
+    dataset columns you care about.
+
     Extra **dataset** columns (passed through by TRL) should include, per row:
 
     - ``task``: str — difficulty (e.g. ``"easy"``).

@@ -15,7 +15,7 @@ This project uses **Group Relative Policy Optimization (GRPO)** in Hugging Face 
 - a **`train_dataset` with a `prompt` column** (plus any extra columns your reward needs),
 - one or more **`reward_funcs`**.
 
-Each reward function receives **batched** keyword args: at least `prompts`, `completions`, and **any extra column** from the dataset. It must return a **list of floats** (one per sample in the batch), using `**kwargs` for forward compatibility.
+Each reward function receives **batched** keyword args: at least `prompts`, `completions`, and **any extra column** from the dataset. TRL 1.2+ also injects `completion_ids`, `trainer_state`, `log_extra`, and `log_metric` (and sometimes `environments`); ignore them unless you use them. It must return a **list of floats** (optional entries may be `None` → treated as NaN in TRL), using `**kwargs` for forward compatibility. **`GRPOConfig` in TRL 1.x no longer has `max_prompt_length`**; cap prompts in the dataset or tokenizer step instead.
 
 **There is no `env_factory` in current TRL** for generic OpenEnv. The **environment runs inside the reward function**: for each generated `completion` string, you parse it, run `reset` / `step` on [`LearnHandwritingEnv`](./client.py), and map the final observation to a scalar (e.g. `match_percentage` or last-step reward). The old sketch in `temp.md` (OpenEnvBridge + `env_factory`) is **not** the current TRL API; use `reward_funcs` + `LearnHandwritingEnv` as in [`datagen_sft/grpo_rewards.py`](datagen_sft/grpo_rewards.py).
 

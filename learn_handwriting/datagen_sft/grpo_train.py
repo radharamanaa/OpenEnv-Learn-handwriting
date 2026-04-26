@@ -4,7 +4,7 @@ Example GRPO training entry (TRL + OpenEnv reward).
 
 Prerequisites:
   - OpenEnv server up (set OPENENV_BASE_URL).
-  - ``pip install 'trl>=0.16'`` and project deps (``uv sync --extra train`` or equivalent).
+  - ``pip install 'trl>=1.0,<2'`` and project deps (``uv sync --extra train`` or equivalent; GRPOConfig changed across TRL 0.x/1.x).
   - GPU: unquantized GRPO uses bf16/fp16 weights (no 4/8-bit); see GRPO_PLAN.md for
     VRAM (e.g. ~48G class for 7B+LoRA, small models for 24G smoke).
 
@@ -112,6 +112,7 @@ def main() -> None:
     elif os.environ.get("HF_TOKEN"):
         print("Note: HF_TOKEN is set but --hub_model_id / HUB_MODEL_ID is empty; skipping Hub push.", flush=True)
 
+    # Newer TRL dropped GRPOConfig.max_prompt_length; truncate/filter prompts in the dataset if needed.
     tcfg = GRPOConfig(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
@@ -119,7 +120,6 @@ def main() -> None:
         gradient_accumulation_steps=1,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
-        max_prompt_length=512,
         num_train_epochs=args.num_train_epochs,
         logging_steps=1,
         remove_unused_columns=False,
