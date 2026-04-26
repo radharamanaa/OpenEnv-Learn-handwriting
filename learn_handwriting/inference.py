@@ -210,15 +210,22 @@ def get_stroke(
     ink_remaining: int,
     last_reward: float,
     history: List[str],
+    *,
+    model: Optional[str] = None,
+    last_integrity_violated: bool = False,
+    char_bbox: Optional[tuple[int, int, int, int]] = None,
 ) -> StrokeOutput:
+    model_id = model or MODEL_NAME
     user_prompt = build_user_prompt(
         target_character, step, strokes_remaining,
         match_percentage, last_pixels_matched, last_pixels_wasted, ink_remaining,
         last_reward, history,
+        last_integrity_violated=last_integrity_violated,
+        char_bbox=char_bbox,
     )
     try:
         completion = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=model_id,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
@@ -302,7 +309,8 @@ async def run_task(task_name: str, env: LearnHandwritingEnv, client: OpenAI) -> 
                 client, step, strokes_remaining, target_character,
                 obs.match_percentage, last_pixels_matched, last_pixels_wasted,
                 ink_remaining, last_reward, history,
-                last_integrity_violated, bbox,
+                last_integrity_violated=last_integrity_violated,
+                char_bbox=bbox,
             )
 
             if stroke.action_type == "circle":

@@ -21,6 +21,9 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from dotenv import load_dotenv
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
@@ -38,6 +41,7 @@ from server.renderer import BRUSH_WIDTH, render_target_character
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME   = os.getenv("MODEL_NAME")
+MODEL_REVISION = os.getenv("MODEL_REVISION", "main")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
 MAX_STEPS     = 15
@@ -45,6 +49,15 @@ TEMPERATURE   = 0.7
 STROKE_DELAY  = 1.5   # seconds to pause after each stroke update
 MAX_DRAWN_MULTIPLIER = float(os.getenv("MAX_DRAWN_MULTIPLIER", "1.7"))
 PRINT_LLM_PROMPT = os.getenv("PRINT_LLM_PROMPT", "true").lower() in ("true", "1", "yes")
+
+
+def get_watch_client():
+    """Returns either a LocalModelClient or an OpenAI API client based on MODEL_NAME."""
+    is_local = "/" in (MODEL_NAME or "") or os.path.exists(MODEL_NAME or "")
+    if is_local:
+        return LocalModelClient(MODEL_NAME, revision=MODEL_REVISION)
+    else:
+        return OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
 
 # ── LLM schema ────────────────────────────────────────────────────────────────
@@ -97,8 +110,87 @@ def _action_str(s: StrokeOutput) -> str:
     return f"line({s.x1},{s.y1}->{s.x2},{s.y2})"
 
 
+# ── Local Model Client (Mimics OpenAI for Transformers) ──────────────────────
+
+class LocalModelClient:
+    def __init__(self, model_id_or_path: str, revision: str = "main"):
+        # --- Device Discovery ---
+        if torch.cuda.is_available():
+            device_type = "cuda"
+        elif torch.backends.mps.is_available():
+            device_type = "mps"
+        else:
+            device_type = "cpu"
+
+        print(f"\n" + "="*40)
+        print(f"DEVICE DISCOVERY (Local Inference)")
+        print(f"Detected device: {device_type.upper()}")
+        if device_type == "cuda":
+            print(f"  GPU Name: {torch.cuda.get_device_name(0)}")
+            torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        elif device_type == "mps":
+            print(f"  Apple Silicon GPU detected (MPS)")
+            torch_dtype = torch.float16
+        else:
+            print(f"  WARNING: No GPU detected. Local inference will be slow.")
+            torch_dtype = torch.float32
+        print("="*40 + "\n")
+        # ------------------------
+
+        print(f"📦 Loading local/HF model: {model_id_or_path} (revision: {revision})")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_id_or_path, trust_remote_code=True, revision=revision)
+        
+        # Check if it's a PEFT model or base model
+        try:
+            # Try loading as a PEFT model first
+            base_model_id = "Qwen/Qwen2.5-7B-Instruct" # Default base
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model_id, 
+                torch_dtype=torch_dtype, 
+                device_map="auto", 
+                trust_remote_code=True
+            )
+            self.model = PeftModel.from_pretrained(base, model_id_or_path, revision=revision)
+            print("✅ Loaded as LoRA adapter.")
+        except Exception:
+            # Fallback to standard loading
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id_or_path, 
+                torch_dtype=torch_dtype, 
+                device_map="auto", 
+                trust_remote_code=True,
+                revision=revision
+            )
+            print("✅ Loaded as standalone model.")
+        
+        self.model.eval()
+        self.chat_completions = self # Mimic structure: client.chat.completions.create
+
+    def create(self, model: str, messages: list, temperature: float, response_format: dict):
+        text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
+        
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs, 
+                max_new_tokens=512, 
+                temperature=max(temperature, 0.01),
+                do_sample=temperature > 0
+            )
+        
+        content = self.tokenizer.decode(outputs[0][len(inputs["input_ids"][0]):], skip_special_tokens=True)
+        
+        # Wrap in a mock response object
+        class MockChoice:
+            def __init__(self, c): self.message = type('obj', (object,), {'content': c})
+        class MockResponse:
+            def __init__(self, c): self.choices = [MockChoice(c)]
+        
+        return MockResponse(content)
+
+
 def get_stroke(
-    client: OpenAI,
+    client: OpenAI | LocalModelClient,
     step: int,
     target_char: str,
     match_pct: float,
@@ -281,7 +373,14 @@ def _update_display(
 
 async def run_watch(task_name: str) -> None:
     """Run one full episode and display every stroke live."""
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Logic to decide between API and Local loading
+    is_local = "/" in (MODEL_NAME or "") or os.path.exists(MODEL_NAME or "")
+    
+    if is_local:
+        client = LocalModelClient(MODEL_NAME, revision=MODEL_REVISION)
+    else:
+        client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+        
     env = LearnHandwritingEnv(base_url=ENV_BASE_URL)
 
     try:
