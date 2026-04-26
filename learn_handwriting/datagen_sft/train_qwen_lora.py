@@ -3,8 +3,15 @@
 LoRA fine-tune Qwen2.5 Instruct on `qwen25_finetune_data.jsonl` (multi-turn JSON strokes).
 
 Install (example):
-  pip install torch transformers "trl>=0.16" peft accelerate datasets
+  pip install torch transformers "trl>=0.16" peft accelerate datasets bitsandbytes
   (TRL 0.16+ uses SFTConfig(max_length=...); older TRL used max_seq_length — this script supports both.)
+
+  Qwen2.5-7B + LoRA SFT (batch 1, grad accum 8, ~2k context, this script) — approx VRAM:
+    --base_quant 8bit  (default on CUDA)  ≈ 16–22 GB
+    --base_quant 4bit                    ≈ 12–18 GB  (tightest; still OK for ~20GB)
+    --base_quant none  (bf16/fp16 base)   ≈ 24–40 GB  (often needs A100-40/48/80G or 2× GPU)
+  OOM: lower --max_seq_length, or use --base_quant 4bit, or
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 Run from repo root:
   PYTHONPATH=. python datagen_sft/train_qwen_lora.py
@@ -72,7 +79,19 @@ def main() -> None:
     parser.add_argument("--per_device_train_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=2e-4)
-    parser.add_argument("--max_seq_length", type=int, default=4096)
+    parser.add_argument(
+        "--max_seq_length",
+        type=int,
+        default=2048,
+        help="Token cap for SFT (longer = much more VRAM). 4096+ often OOMs 7B on 20–24GB without QLoRA.",
+    )
+    parser.add_argument(
+        "--base_quant",
+        choices=("8bit", "4bit", "none"),
+        default=None,
+        help="How the frozen base is stored: 8bit (default on CUDA; QLoRA + bitsandbytes), 4bit (lowest VRAM), "
+        "none=full bf16/fp16 (highest quality headroom, needs a large GPU). MPS/CPU: forced to none.",
+    )
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--logging_steps", type=int, default=10)
     parser.add_argument("--lora_r", type=int, default=16)
@@ -95,8 +114,8 @@ def main() -> None:
 
     import torch
     from datasets import load_dataset
-    from peft import LoraConfig
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from peft import LoraConfig, prepare_model_for_kbit_training
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     import inspect
 
     from trl import SFTTrainer, SFTConfig
@@ -161,22 +180,60 @@ def main() -> None:
         desc="Formatting chat template",
     )
 
-    # Dtype selection
+    if args.base_quant is None:
+        args.base_quant = "8bit" if device == "cuda" else "none"
+    if args.base_quant in ("4bit", "8bit") and device != "cuda":
+        print("4/8-bit QLoRA needs CUDA; loading in bf16/fp32 instead (--base_quant none).")
+        args.base_quant = "none"
+
+    # Dtype selection (used for non-quantized loads and as quant compute dtype)
     if device == "cuda":
-        torch_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+        torch_dtype = (
+            torch.bfloat16
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+            else torch.float16
+        )
     elif device == "mps":
-        # MPS currently has better support for float16, though float32 is safest. 
-        # Some Qwen kernels might require float16 or float32 on MPS.
         torch_dtype = torch.float16
     else:
         torch_dtype = torch.float32
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        torch_dtype=torch_dtype,
-        trust_remote_code=True,
-        device_map="auto",
-    )
+    if args.base_quant in ("4bit", "8bit"):
+        try:
+            import bitsandbytes  # noqa: F401
+        except ImportError as e:
+            raise SystemExit(
+                "QLoRA (4/8-bit) needs bitsandbytes: pip install bitsandbytes  "
+                "Or use full precision: --base_quant none (needs more VRAM)."
+            ) from e
+        if args.base_quant == "4bit":
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch_dtype,
+            )
+            print("Loading base in 4-bit NF4 (QLoRA) — tightest VRAM")
+        else:
+            bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+            print("Loading base in 8-bit (QLoRA) — default; LoRA still trained in fp16/bf16")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=True, gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+    else:
+        print("Loading base in full bf16/fp16 (no quant) — use a 24–40GB+ class GPU for 7B + LoRA SFT")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            torch_dtype=torch_dtype,
+            trust_remote_code=True,
+            device_map="auto",
+        )
 
     peft_config = LoraConfig(
         r=args.lora_r,
@@ -212,6 +269,7 @@ def main() -> None:
         bf16=use_bf16,
         fp16=use_fp16,
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         optim="adamw_torch",
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
