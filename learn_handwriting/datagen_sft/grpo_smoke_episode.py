@@ -9,6 +9,8 @@ From the parent of the ``learn_handwriting`` package (e.g. ``.../scaler_8_april`
   python learn_handwriting/datagen_sft/grpo_smoke_episode.py
 
 Use this to verify connectivity and action/reward shape before GRPO.
+
+Set ``LEARN_HANDWRITING_ENV_LOG=1`` for detailed WebSocket logs (see ``learn_handwriting.client``).
 """
 
 from __future__ import annotations
@@ -21,10 +23,16 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from learn_handwriting import LearnHandwritingAction, LearnHandwritingEnv
+from learn_handwriting import (
+    LearnHandwritingAction,
+    LearnHandwritingEnv,
+    configure_openenv_ws_logging,
+)
 
 
 def main() -> None:
+    configure_openenv_ws_logging()
+
     base = os.environ.get("OPENENV_BASE_URL", "http://127.0.0.1:8000")
     task = os.environ.get("GRPO_SMOKE_TASK", "easy")
     char = os.environ.get("GRPO_SMOKE_CHAR", "L")

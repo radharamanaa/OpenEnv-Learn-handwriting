@@ -10,6 +10,9 @@ Prerequisites:
 
   OPENENV_BASE_URL=https://your-space.hf.space PYTHONPATH=. python datagen_sft/grpo_train.py \\
     --model Qwen/Qwen2.5-0.5B-Instruct --hub_model_id your-name/Qwen2.5-Handwriting-GRPO
+
+  Verbose OpenEnv WebSocket logs (reset/step payloads, validation errors): set
+  LEARN_HANDWRITING_ENV_LOG=1; ``grpo_train`` calls ``configure_openenv_ws_logging()``.
 """
 
 from __future__ import annotations
@@ -27,6 +30,8 @@ if _DSF not in sys.path:
     sys.path.insert(0, _DSF)
 
 from grpo_rewards import openenv_stroke_list_reward
+
+from learn_handwriting import configure_openenv_ws_logging
 
 
 def _smoke_dataset():
@@ -80,6 +85,8 @@ def main() -> None:
         help="Create/use a private Hub repo when pushing the adapter.",
     )
     args = parser.parse_args()
+
+    configure_openenv_ws_logging()
 
     import torch
     from peft import LoraConfig

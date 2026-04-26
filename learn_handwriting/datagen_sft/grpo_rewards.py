@@ -49,8 +49,13 @@ def _coerce_stroke_list(raw: str) -> list[dict[str, Any]] | None:
 def _dict_to_action(d: dict[str, Any]) -> Any:
     from learn_handwriting import LearnHandwritingAction
 
+    raw_type = d.get("action_type", "line")
+    at = raw_type.strip().lower() if isinstance(raw_type, str) else "line"
+    if at not in ("line", "curve", "circle", "ellipse"):
+        at = "line"
+
     return LearnHandwritingAction(
-        action_type=d.get("action_type", "line"),
+        action_type=at,
         x1=int(d.get("x1", 0)),
         y1=int(d.get("y1", 0)),
         x2=(int(d["x2"]) if d.get("x2") is not None else None),

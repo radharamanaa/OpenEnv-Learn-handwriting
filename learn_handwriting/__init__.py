@@ -6,7 +6,7 @@
 
 """Learn Handwriting Environment."""
 
-from .client import LearnHandwritingEnv
+from .client import LearnHandwritingEnv, configure_openenv_ws_logging
 from .models import LearnHandwritingAction, LearnHandwritingObservation, LearnHandwritingState
 
 __all__ = [
@@ -14,4 +14,5 @@ __all__ = [
     "LearnHandwritingObservation",
     "LearnHandwritingState",
     "LearnHandwritingEnv",
+    "configure_openenv_ws_logging",
 ]

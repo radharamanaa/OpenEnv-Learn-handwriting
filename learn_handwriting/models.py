@@ -16,7 +16,35 @@ character image to compute reward and match progress.
 from typing import List, Literal, Optional
 
 from openenv.core.env_server.types import Action, Observation, State
-from pydantic import Field
+from pydantic import Field, field_validator
+
+_ALLOWED_ACTIONS = frozenset({"line", "curve", "circle", "ellipse"})
+
+
+def _coerce_canvas_int(v: object) -> int:
+    """Integer grid 0–99 from JSON (ints, floats, numeric strings)."""
+    if isinstance(v, bool):
+        raise ValueError("boolean is not a valid coordinate")
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            raise ValueError("empty coordinate")
+        v = float(v)
+    x = int(round(float(v)))
+    return max(0, min(99, x))
+
+
+def _coerce_radius_int(v: object) -> int:
+    """Radii 1–100 for circle / ellipse."""
+    if isinstance(v, bool):
+        raise ValueError("boolean is not a valid radius")
+    if isinstance(v, str):
+        v = v.strip()
+        if not v:
+            raise ValueError("empty radius")
+        v = float(v)
+    x = int(round(float(v)))
+    return max(1, min(100, x))
 
 
 class LearnHandwritingAction(Action):
@@ -38,6 +66,40 @@ class LearnHandwritingAction(Action):
     radius: Optional[int] = Field(default=None, ge=1, le=100, description="For 'circle' only: The uniform radius of the circle. Ignored for 'ellipse' and others.")
     rx: Optional[int] = Field(default=None, ge=1, le=100, description="For 'ellipse' only: The horizontal radius. Ignored for 'circle' and others.")
     ry: Optional[int] = Field(default=None, ge=1, le=100, description="For 'ellipse' only: The vertical radius. Ignored for 'circle' and others.")
+
+    @field_validator("action_type", mode="before")
+    @classmethod
+    def _normalize_action_type(cls, v: object) -> object:
+        if v is None:
+            return "line"
+        if isinstance(v, str):
+            key = v.strip().lower()
+            if key in _ALLOWED_ACTIONS:
+                return key
+        return v
+
+    @field_validator("x1", "y1", mode="before")
+    @classmethod
+    def _validate_xy_required(cls, v: object) -> int:
+        return _coerce_canvas_int(v)
+
+    @field_validator("x2", "y2", "x3", "y3", mode="before")
+    @classmethod
+    def _validate_xy_optional(cls, v: object) -> Optional[int]:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return _coerce_canvas_int(v)
+
+    @field_validator("radius", "rx", "ry", mode="before")
+    @classmethod
+    def _validate_radii(cls, v: object) -> Optional[int]:
+        if v is None:
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return _coerce_radius_int(v)
 
 
 class LearnHandwritingObservation(Observation):

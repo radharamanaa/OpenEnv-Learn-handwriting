@@ -6,12 +6,61 @@
 
 """Learn Handwriting Environment Client."""
 
-from typing import Dict
+import json
+import logging
+import os
+from typing import Any, Dict
 
 from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 
 from .models import LearnHandwritingAction, LearnHandwritingObservation, LearnHandwritingState
+
+logger = logging.getLogger(__name__)
+
+# Set LEARN_HANDWRITING_ENV_LOG=1 (or true/yes/debug) for WebSocket request/response logs.
+_WS_LOG_ENV = "LEARN_HANDWRITING_ENV_LOG"
+
+
+def _ws_verbose_logging_enabled() -> bool:
+    return os.environ.get(_WS_LOG_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "debug",
+        "all",
+    )
+
+
+def _json_for_log(obj: Any) -> str:
+    try:
+        return json.dumps(obj, indent=2, default=str, ensure_ascii=False)
+    except Exception:
+        return repr(obj)
+
+
+def configure_openenv_ws_logging() -> None:
+    """Route ``learn_handwriting.client`` logs to stdout when ``LEARN_HANDWRITING_ENV_LOG`` is set.
+
+    Call once at the start of training or smoke scripts so HF Jobs / notebooks show
+    WebSocket traffic (INFO) and full success payloads (DEBUG on this module).
+    No-op when the env var is unset or falsey.
+    """
+    import sys
+
+    if not _ws_verbose_logging_enabled():
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
+    logging.getLogger(__name__).setLevel(logging.DEBUG)
+    print(
+        f"[learn_handwriting] LEARN_HANDWRITING_ENV_LOG is set; OpenEnv WebSocket logging to stdout.",
+        flush=True,
+    )
 
 
 class LearnHandwritingEnv(
@@ -23,6 +72,12 @@ class LearnHandwritingEnv(
     This client maintains a persistent WebSocket connection to the environment server,
     enabling efficient multi-step interactions with lower latency.
     Each client instance has its own dedicated environment session on the server.
+
+    Debugging: set environment variable ``LEARN_HANDWRITING_ENV_LOG=1`` (or ``true``)
+    to log every WebSocket request and a short summary of each successful response.
+    Full successful responses are logged at DEBUG on this logger. On server
+    ``VALIDATION_ERROR``, the full error frame is logged at ERROR and Pydantic
+    ``errors`` are appended to the raised ``RuntimeError``.
 
     Example:
         >>> # Connect to a running server
@@ -57,6 +112,60 @@ class LearnHandwritingEnv(
             "rx": action.rx,
             "ry": action.ry,
         }
+
+    async def _send_and_receive(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Send one WebSocket frame, receive reply; log details when enabled."""
+        verbose = _ws_verbose_logging_enabled()
+        if verbose:
+            logger.info(
+                "[learn_handwriting OpenEnv] → send type=%r\n%s",
+                message.get("type"),
+                _json_for_log(message),
+            )
+
+        await self._send(message)
+        response = await self._receive()
+
+        if response.get("type") == "error":
+            err = response.get("data") or {}
+            logger.error(
+                "[learn_handwriting OpenEnv] ← error type=%r code=%r message=%r full_response=\n%s",
+                response.get("type"),
+                err.get("code"),
+                err.get("message"),
+                _json_for_log(response),
+            )
+            detail = ""
+            raw_errors = err.get("errors")
+            if raw_errors is not None:
+                ej = _json_for_log(raw_errors)
+                if len(ej) > 8000:
+                    ej = ej[:8000] + "\n…(truncated for RuntimeError)"
+                detail = f" validation_errors={ej}"
+            raise RuntimeError(
+                f"Server error: {err.get('message', 'Unknown error')} "
+                f"(code: {err.get('code', 'UNKNOWN')}){detail}"
+            )
+
+        if verbose:
+            data = response.get("data") or {}
+            obs = data.get("observation") or {}
+            logger.info(
+                "[learn_handwriting OpenEnv] ← ok type=%r done=%r reward=%r "
+                "match_percentage=%r target=%r strokes_used=%r",
+                response.get("type"),
+                data.get("done"),
+                data.get("reward"),
+                obs.get("match_percentage"),
+                obs.get("target_character"),
+                obs.get("strokes_used"),
+            )
+            logger.debug(
+                "[learn_handwriting OpenEnv] ← full response:\n%s",
+                _json_for_log(response),
+            )
+
+        return response
 
     def _parse_result(self, payload: Dict) -> StepResult[LearnHandwritingObservation]:
         """Parse server response into StepResult[LearnHandwritingObservation]."""
