@@ -95,8 +95,8 @@ def main() -> None:
     import torch
     from datasets import load_dataset
     from peft import LoraConfig
-    from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-    from trl import SFTTrainer
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import SFTTrainer, SFTConfig
 
     # --- Device Discovery ---
     if torch.cuda.is_available():
@@ -184,8 +184,10 @@ def main() -> None:
     use_bf16 = (device == "cuda" and torch.cuda.is_bf16_supported())
     use_fp16 = (device == "cuda" and not use_bf16) or (device == "mps")
 
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=args.output_dir,
+        dataset_text_field="text",
+        max_seq_length=args.max_seq_length,
         num_train_epochs=args.num_train_epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -213,8 +215,6 @@ def main() -> None:
         train_dataset=ds,
         peft_config=peft_config,
         processing_class=tokenizer,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_length,
     )
 
     trainer.train()
