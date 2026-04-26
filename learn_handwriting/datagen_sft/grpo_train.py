@@ -15,6 +15,7 @@ Prerequisites:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 
@@ -112,12 +113,21 @@ def main() -> None:
     elif os.environ.get("HF_TOKEN"):
         print("Note: HF_TOKEN is set but --hub_model_id / HUB_MODEL_ID is empty; skipping Hub push.", flush=True)
 
+    per_device_train_batch_size = 1
+    gradient_accumulation_steps = 1
+    # TRL: generation_batch_size (defaults to per_device * world * steps) must be divisible by num_generations.
+    # With per_device=1 and one process that default is 1, which fails for num_generations=2+.
+    world = max(1, int(os.environ.get("WORLD_SIZE", "1") or 1))
+    base = per_device_train_batch_size * world * gradient_accumulation_steps
+    gen_batch = (base * args.num_generations) // math.gcd(base, args.num_generations)
+
     # Newer TRL dropped GRPOConfig.max_prompt_length; truncate/filter prompts in the dataset if needed.
     tcfg = GRPOConfig(
         output_dir=args.output_dir,
         learning_rate=args.learning_rate,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
+        per_device_train_batch_size=per_device_train_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        generation_batch_size=gen_batch,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         num_train_epochs=args.num_train_epochs,
