@@ -98,20 +98,37 @@ class LearnHandwritingEnv(
         ...     client.close()
     """
 
-    def _step_payload(self, action: LearnHandwritingAction) -> Dict:
-        """Convert LearnHandwritingAction to JSON payload for the step message."""
-        return {
-            "action_type": action.action_type,
+    def _step_payload(self, action: LearnHandwritingAction) -> Dict[str, Any]:
+        """Convert LearnHandwritingAction to JSON for the step message.
+
+        Omits keys whose values are ``None`` so older line-only servers (which use
+        ``extra='forbid'`` and only define x1–y2) do not see forbidden fields.
+        Omits ``action_type`` when it is ``\"line\"`` — same legacy servers have no
+        such field; current servers default ``action_type`` to line. Non-line
+        strokes still send ``action_type`` plus the relevant coordinates (requires
+        a matching server build for curve/circle/ellipse).
+        """
+        data: Dict[str, Any] = {
             "x1": action.x1,
             "y1": action.y1,
-            "x2": action.x2,
-            "y2": action.y2,
-            "x3": action.x3,
-            "y3": action.y3,
-            "radius": action.radius,
-            "rx": action.rx,
-            "ry": action.ry,
         }
+        if action.x2 is not None:
+            data["x2"] = action.x2
+        if action.y2 is not None:
+            data["y2"] = action.y2
+        if action.x3 is not None:
+            data["x3"] = action.x3
+        if action.y3 is not None:
+            data["y3"] = action.y3
+        if action.radius is not None:
+            data["radius"] = action.radius
+        if action.rx is not None:
+            data["rx"] = action.rx
+        if action.ry is not None:
+            data["ry"] = action.ry
+        if action.action_type != "line":
+            data["action_type"] = action.action_type
+        return data
 
     async def _send_and_receive(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """Send one WebSocket frame, receive reply; log details when enabled."""
