@@ -103,6 +103,9 @@ def main() -> None:
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
+    # Do not set hub_strategy to "end": in current Transformers, that skips uploads inside
+    # _push_from_checkpoint, so nothing is ever uploaded despite push_to_hub=True. Default
+    # "every_save" pushes after each checkpoint (including the mandatory save on the last step).
     extra_hub: dict[str, object] = {}
     if args.hub_model_id:
         extra_hub = {
@@ -110,7 +113,6 @@ def main() -> None:
             "hub_model_id": args.hub_model_id,
             "hub_private_repo": args.hub_private,
             "hub_token": os.environ.get("HF_TOKEN"),
-            "hub_strategy": "end",
         }
 
     print(f"Model: {args.model}", flush=True)
@@ -157,6 +159,10 @@ def main() -> None:
     )
     trainer.train()
     print(f"Done. Checkpoints in {args.output_dir}", flush=True)
+    if args.hub_model_id and os.environ.get("HF_TOKEN"):
+        # One blocking upload guarantees the Hub has weights (async checkpoint push can race or be skipped).
+        trainer.push_to_hub(commit_message="GRPO adapter", blocking=True)
+        print(f"Hub: https://huggingface.co/{args.hub_model_id}", flush=True)
 
 
 if __name__ == "__main__":
