@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import textwrap
+from types import SimpleNamespace
 from typing import List, Literal, Optional
 
 import cv2
@@ -164,9 +165,19 @@ class LocalModelClient:
             print("✅ Loaded as standalone model.")
         
         self.model.eval()
-        self.chat_completions = self # Mimic structure: client.chat.completions.create
+        # Match OpenAI client: get_stroke() calls client.chat.completions.create(...)
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self.create)
+        )
 
-    def create(self, model: str, messages: list, temperature: float, response_format: dict):
+    def create(
+        self,
+        model: str,
+        messages: list,
+        temperature: float = 0.7,
+        response_format: dict | None = None,
+        **kwargs,
+    ):
         text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
         
