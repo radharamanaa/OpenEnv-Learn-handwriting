@@ -113,7 +113,10 @@ class LearnHandwritingObservation(Observation):
     strokes_used: int = Field(default=0, description="Number of strokes used so far")
     pixels_matched_this_stroke: int = Field(
         default=0,
-        description="Pixels in this stroke that intersect the target (reward numerator)",
+        description=(
+            "New target pixels covered this stroke (delta after merge); reward numerator. "
+            "Retracing already-filled target area yields 0."
+        ),
     )
     total_matched_pixels: int = Field(
         default=0,

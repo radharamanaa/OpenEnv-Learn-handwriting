@@ -212,34 +212,37 @@ class LearnHandwritingEnvironment(Environment):
 
         Workflow:
           1. Draw stroke on a fresh temp_matrix.
-          2. Intersect temp_matrix with target → pixels_matched_this_stroke → reward.
-          3. Merge temp_matrix into canvas via element-wise max.
-          4. Check shape integrity — episode ends if a protected zone is filled.
-          5. Intersect updated canvas with target → total_matched_pixels → match_percentage.
-          6. Increment strokes_used; check remaining done conditions.
+          2. Record pre-merge cumulative match; merge stroke into canvas (element-wise max).
+          3. Check shape integrity — episode ends if a protected zone is filled.
+          4. Reward from **new** target coverage only (marginal pixels); retracing gives 0.
+             Wasted ink = stroke pixels that never intersect the target.
+          5. total_matched_pixels → match_percentage; increment strokes_used; done checks.
         """
         self._state.step_count += 1
 
         temp_matrix = _draw_action(action)
 
-        # Reward: intersection of this stroke with the target
-        pixels_matched_this_stroke = int(np.sum(temp_matrix * self._target_matrix))
-        reward = (
-            pixels_matched_this_stroke / self._total_target_pixels
-            if self._total_target_pixels > 0
-            else 0.0
-        )
+        # Stroke ∩ target (all pixels this stroke paints on the letter shape)
+        stroke_on_target = int(np.sum(temp_matrix * self._target_matrix))
+        prev_total_matched = int(np.sum(self._canvas * self._target_matrix))
 
         # Merge stroke into cumulative canvas
         self._canvas = np.maximum(self._canvas, temp_matrix)
 
         # Integrity check — must happen after merge so the canvas reflects this stroke
         integrity_violated = self._check_integrity_violation()
-        if integrity_violated:
-            reward = 0.0  # no reward for violating shape integrity (grader requires ≥ 0)
 
         # Cumulative match stats
         total_matched_pixels = int(np.sum(self._canvas * self._target_matrix))
+        # Reward only **new** coverage: retracing already-filled target pixels gives 0 progress
+        pixels_matched_this_stroke = total_matched_pixels - prev_total_matched
+        reward = (
+            pixels_matched_this_stroke / self._total_target_pixels
+            if self._total_target_pixels > 0
+            else 0.0
+        )
+        if integrity_violated:
+            reward = 0.0  # no reward for violating shape integrity (grader requires ≥ 0)
         match_percentage = (
             total_matched_pixels / self._total_target_pixels
             if self._total_target_pixels > 0
@@ -248,9 +251,9 @@ class LearnHandwritingEnvironment(Environment):
 
         strokes_used = self._state.strokes_used + 1
 
-        # Ink tracking
+        # Ink tracking — wasted = stroke pixels that never intersect the target (not "redundant" retracing)
         pixels_drawn_this_stroke = int(np.sum(temp_matrix))
-        pixels_wasted_this_stroke = pixels_drawn_this_stroke - pixels_matched_this_stroke
+        pixels_wasted_this_stroke = max(0, pixels_drawn_this_stroke - stroke_on_target)
         total_drawn_pixels = int(np.sum(self._canvas))
         max_drawn_multiplier = float(os.getenv("MAX_DRAWN_MULTIPLIER", "1.7"))
         max_allowed_pixels = int(max_drawn_multiplier * self._total_target_pixels)
